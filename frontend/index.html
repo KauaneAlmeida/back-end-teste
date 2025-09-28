@@ -190,9 +190,84 @@
 
         const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
         addMessage(botMessage, 'bot');
+
+        // 🚀 NOVA FUNCIONALIDADE: Detectar se é finalização do fluxo e enviar para WhatsApp
+        if (data.flow_completed && data.phone_collected) {
+          await handleWhatsAppIntegration(data);
+        }
+        
       } catch (err) {
         console.error('API Error:', err);
         addMessage("⚠️ Erro de conexão com o backend.", 'bot');
+      }
+    }
+
+    // 🚀 NOVA FUNÇÃO: Integração com WhatsApp após completar fluxo
+    async function handleWhatsAppIntegration(flowData) {
+      try {
+        const sessionId = flowData.session_id || localStorage.getItem('chat_session_id');
+        const leadData = flowData.lead_data || {};
+        
+        // Extrair dados do lead
+        const userName = leadData.identification || 'Cliente';
+        const contactInfo = leadData.contact_info || '';
+        
+        // Extrair telefone do contact_info
+        const phoneMatch = contactInfo.match(/(\d{10,11})/);
+        const userPhone = phoneMatch ? phoneMatch[1] : '';
+        
+        // Extrair email do contact_info
+        const emailMatch = contactInfo.match(/([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/);
+        const userEmail = emailMatch ? emailMatch[1] : '';
+        
+        if (!userPhone) {
+          console.warn('⚠️ Telefone não encontrado, não enviando WhatsApp');
+          return;
+        }
+        
+        // Formatar telefone para WhatsApp
+        let formattedPhone = userPhone;
+        if (!formattedPhone.startsWith('55')) {
+          formattedPhone = '55' + formattedPhone;
+        }
+        
+        console.log('📱 Enviando mensagem inicial WhatsApp...', {
+          name: userName,
+          phone: formattedPhone,
+          session: sessionId
+        });
+        
+        // Enviar mensagem inicial para WhatsApp
+        const whatsappResponse = await fetch(`${API_BASE_URL}/api/v1/whatsapp/send-initial-message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: userName,
+            phone: formattedPhone,
+            email: userEmail,
+            session_id: sessionId,
+            additional_info: {
+              area: leadData.area_qualification || '',
+              case_details: leadData.case_details || '',
+              source: 'landing_chat_completed'
+            }
+          })
+        });
+        
+        if (whatsappResponse.ok) {
+          const whatsappData = await whatsappResponse.json();
+          console.log('✅ Mensagem WhatsApp enviada:', whatsappData);
+          
+          // Mostrar mensagem de sucesso para o usuário
+          addMessage(`📱 Perfeito, ${userName.split()[0]}! Enviamos uma mensagem para seu WhatsApp. Responda lá para continuar o atendimento com nossa equipe especializada! 🚀`, 'bot');
+        } else {
+          console.error('❌ Erro ao enviar WhatsApp:', whatsappResponse.status);
+          addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve.', 'bot');
+        }
+        
+      } catch (error) {
+        console.error('❌ Erro na integração WhatsApp:', error);
+        addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve.', 'bot');
       }
     }
 

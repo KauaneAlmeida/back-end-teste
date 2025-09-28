@@ -363,6 +363,143 @@ async def whatsapp_webhook(request: Request):
 
 # =================== ROTAS DE AUTORIZAÇÃO ===================
 
+@router.post("/whatsapp/send-initial-message")
+async def send_initial_whatsapp_message(request: dict):
+    """
+    🚀 NOVA FUNCIONALIDADE: Enviar mensagem inicial do WhatsApp após formulário da Landing Page
+    
+    Fluxo:
+    1. Usuário preenche formulário na Landing Page
+    2. Frontend chama este endpoint com dados do usuário
+    3. Backend envia mensagem inicial para WhatsApp do usuário
+    4. Mensagem inclui session_id para autorização
+    5. Quando usuário responder, webhook reconhece session_id
+    """
+    try:
+        # Extrair dados do request
+        user_name = request.get("name", "").strip()
+        user_phone = request.get("phone", "").strip()
+        user_email = request.get("email", "").strip()
+        session_id = request.get("session_id", "").strip()
+        additional_info = request.get("additional_info", {})
+        
+        # Validações básicas
+        if not user_name or not user_phone or not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: name, phone, session_id"
+            )
+        
+        # Validar e formatar telefone
+        try:
+            validated_phone = validate_phone_number(user_phone)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid phone number: {str(e)}")
+        
+        # Validar session_id
+        try:
+            validated_session = validate_session_id(session_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid session_id: {str(e)}")
+        
+        logger.info(f"🚀 Enviando mensagem inicial WhatsApp | User: {user_name} | Phone: {validated_phone} | Session: {validated_session}")
+        
+        # Criar dados de autorização para esta sessão
+        authorization_data = {
+            "session_id": validated_session,
+            "phone_number": validated_phone,
+            "source": "landing_chat",
+            "authorized": True,
+            "authorized_at": datetime.utcnow().isoformat(),
+            "expires_at": (datetime.utcnow() + timedelta(seconds=7200)).isoformat(),  # 2 horas
+            "user_data": {
+                "name": user_name,
+                "email": user_email,
+                "phone": validated_phone,
+                **additional_info
+            },
+            "timestamp": datetime.utcnow().isoformat(),
+            "lead_type": "landing_chat_lead"
+        }
+        
+        # Salvar autorização
+        await save_session_authorization(validated_session, authorization_data)
+        
+        # Criar mensagem inicial estratégica
+        first_name = user_name.split()[0] if user_name else "Cliente"
+        initial_message = f"""Olá {first_name}! 👋
+
+Obrigado por entrar em contato com o escritório m.lima através do nosso site.
+
+Recebemos suas informações e nossa equipe especializada está pronta para te ajudar com seu caso jurídico.
+
+Para darmos continuidade ao seu atendimento de forma personalizada, responda esta mensagem com mais detalhes sobre sua situação.
+
+🆔 Sessão: {validated_session}
+
+---
+✉️ m.lima Advogados Associados
+📱 Atendimento prioritário ativado"""
+        
+        # Formatar número para WhatsApp
+        whatsapp_number = f"{validated_phone}@s.whatsapp.net"
+        
+        # Enviar mensagem via Baileys
+        try:
+            success = await baileys_service.send_whatsapp_message(whatsapp_number, initial_message)
+            
+            if success:
+                logger.info(f"✅ Mensagem inicial enviada com sucesso para {validated_phone}")
+                
+                # Notificar orchestrator sobre a autorização (background)
+                auth_data_for_orchestrator = {
+                    "session_id": validated_session,
+                    "phone_number": validated_phone,
+                    "source": "landing_chat",
+                    "user_data": authorization_data["user_data"]
+                }
+                
+                # Processar em background
+                import asyncio
+                asyncio.create_task(
+                    intelligent_orchestrator.handle_whatsapp_authorization(auth_data_for_orchestrator)
+                )
+                
+                return {
+                    "status": "success",
+                    "message": "Initial WhatsApp message sent successfully",
+                    "session_id": validated_session,
+                    "phone_number": validated_phone,
+                    "user_name": user_name,
+                    "whatsapp_sent": True,
+                    "authorization_created": True,
+                    "expires_in": 7200,
+                    "next_step": "User should respond to WhatsApp message",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            else:
+                logger.error(f"❌ Falha ao enviar mensagem inicial para {validated_phone}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to send WhatsApp message"
+                )
+                
+        except Exception as whatsapp_error:
+            logger.error(f"❌ Erro no envio WhatsApp: {str(whatsapp_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"WhatsApp sending error: {str(whatsapp_error)}"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Erro ao processar mensagem inicial: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 @router.post("/whatsapp/authorize")
 async def authorize_whatsapp_session(
     request: WhatsAppAuthorizationRequest,
