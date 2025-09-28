@@ -364,7 +364,7 @@ Para que eu possa direcionar você ao advogado especialista ideal, preciso de al
         if not data.email:
             missing_items.append("seu e-mail")
         if not data.legal_area:
-            missing_items.append("a área jurídica (Penal ou Saúde)")
+            missing_items.append("a área jurídica (Direito Penal ou Direito da Saúde)")
         
         if not missing_items:
             return self._generate_completion_message(context)

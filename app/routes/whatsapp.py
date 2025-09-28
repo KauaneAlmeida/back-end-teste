@@ -255,47 +255,23 @@ async def whatsapp_webhook(request: Request):
 @router.post("/whatsapp/send-initial-message")
 async def send_initial_whatsapp_message(request: dict):
     """
-    Trigger endpoint: receives landing page data and delegates to Orchestrator.
-    Orchestrator handles authorization, message sending, and flow management.
+    DEPRECATED: This endpoint was for WhatsApp integration from chat.
+    The chat flow is now independent and doesn't redirect to WhatsApp.
+    This endpoint is kept for backward compatibility but should not be used.
     """
     try:
-        user_name = request.get("name", "").strip()
-        user_phone = request.get("phone", "").strip()
-        session_id = request.get("session_id", "").strip()
-        
-        if not user_name or not user_phone or not session_id:
-            raise HTTPException(status_code=400, detail="Missing required fields")
-        
-        validated_phone = validate_phone_number(user_phone)
-        
-        logger.info(f"Landing page trigger: {user_name} | {validated_phone} | {session_id}")
-        
-        # Delegate everything to Orchestrator
-        orchestrator_result = await intelligent_orchestrator.handle_whatsapp_authorization({
-            "session_id": session_id,
-            "phone_number": validated_phone,
-            "source": "landing_chat",
-            "user_data": {
-                "name": user_name,
-                "phone": validated_phone,
-                "email": request.get("email", ""),
-            }
-        })
-        
-        logger.info(f"Orchestrator result: {orchestrator_result.get('status', 'processed')}")
+        logger.warning("⚠️ DEPRECATED endpoint /whatsapp/send-initial-message called")
         
         return {
-            "status": "success",
-            "message": "Trigger sent to Orchestrator - strategic message will be sent",
-            "phone": validated_phone,
-            "session_id": session_id,
-            "orchestrator_result": orchestrator_result
+            "status": "deprecated",
+            "message": "This endpoint is deprecated. Chat flow is now independent and doesn't redirect to WhatsApp.",
+            "note": "Use the chat flow directly or the WhatsApp button flow separately."
         }
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in WhatsApp trigger: {str(e)}")
+        logger.error(f"Error in deprecated WhatsApp trigger: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # =================== AUTORIZAÇÃO ===================
