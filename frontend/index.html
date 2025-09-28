@@ -132,7 +132,6 @@
 
   <script>
     // 🔗 Definindo URL fixa do backend no Render
-    const API_BASE_URL = "http://localhost:8000";
 
 
     function addMessage(text, sender = 'user') {
@@ -191,67 +190,9 @@
         const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
         addMessage(botMessage, 'bot');
 
-        // 🚀 NOVA FUNCIONALIDADE: Detectar se é finalização do fluxo e enviar para WhatsApp
-        if (data.flow_completed && data.phone_collected) {
-          handleWhatsAppIntegration(data);
-        }
-        
       } catch (err) {
         console.error('API Error:', err);
         addMessage("⚠️ Erro de conexão com o backend.", 'bot');
-      }
-    }
-
-    // 🚀 Integração simples com WhatsApp
-    function handleWhatsAppIntegration(flowData) {
-      try {
-        const sessionId = flowData.session_id || localStorage.getItem('chat_session_id');
-        const leadData = flowData.lead_data || {};
-        
-        const userName = leadData.identification || 'Cliente';
-        const contactInfo = leadData.contact_info || '';
-        
-        const phoneMatch = contactInfo.match(/(\d{10,11})/);
-        const userPhone = phoneMatch ? phoneMatch[1] : '';
-        
-        if (!userPhone) {
-          console.warn('⚠️ Telefone não encontrado');
-          return;
-        }
-        
-        let formattedPhone = userPhone;
-        if (!formattedPhone.startsWith('55')) {
-          formattedPhone = '55' + formattedPhone;
-        }
-        
-        console.log('📱 Triggering WhatsApp flow...');
-        
-        // Simple trigger to Orchestrator
-        fetch(`${API_BASE_URL}/api/v1/whatsapp/send-initial-message`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: userName,
-            phone: formattedPhone,
-            session_id: sessionId,
-            email: leadData.email || ''
-          })
-        })
-        .then(response => {
-          if (response.ok) {
-            console.log('✅ WhatsApp trigger sent to Orchestrator');
-            addMessage(`📱 Perfeito, ${userName.split()[0]}! Enviamos uma mensagem para seu WhatsApp. Responda lá para continuar com nossos especialistas! 🚀`, 'bot');
-          } else {
-            addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve. 📞', 'bot');
-          }
-        })
-        .catch(() => {
-          addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve. 📞', 'bot');
-        });
-        
-      } catch (error) {
-        console.error('❌ WhatsApp trigger error:', error);
-        addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve. 📞', 'bot');
       }
     }
 

@@ -28,27 +28,26 @@ router = APIRouter()
 @router.post("/conversation/start", response_model=ConversationResponse)
 async def start_conversation():
     """
-    Start a new conversation session for web platform.
-    CORRIGIDO: Não cria sessão antecipadamente, apenas retorna instruções
+    Start a new conversation session for web chat platform.
+    Returns initial greeting to start the chat flow.
     """
     try:
         session_id = str(uuid.uuid4())
-        logger.info(f"🚀 Starting new web conversation | session={session_id}")
+        logger.info(f"🚀 Starting new web chat conversation | session={session_id}")
 
-        # CORREÇÃO: NÃO criar sessão antecipadamente para evitar conflito
-        # Apenas retornar instruções para o usuário iniciar com saudação
+        # Return initial greeting for chat flow
+        initial_greeting = "Olá! Bem-vindo ao m.lima Advogados. Para começar seu atendimento, digite uma saudação como 'oi' ou 'olá'."
         
         response_data = ConversationResponse(
             session_id=session_id,
-            response="Para começar nosso atendimento, digite uma saudação como 'olá' ou 'oi'.",
+            response=initial_greeting,
             ai_mode=False,
             flow_completed=False,
             phone_collected=False,
-            lead_data={},
             message_count=0
         )
         
-        logger.info(f"✅ Web conversation prepared | session={session_id} | NO SESSION CREATED YET")
+        logger.info(f"✅ Web chat conversation prepared | session={session_id}")
         
         return JSONResponse(
             content=response_data.dict(),
@@ -61,28 +60,28 @@ async def start_conversation():
         )
 
     except Exception as e:
-        logger.error(f"❌ Error starting web conversation: {str(e)}")
+        logger.error(f"❌ Error starting web chat conversation: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start conversation: {str(e)}"
+            detail=f"Failed to start chat conversation: {str(e)}"
         )
 
 
 @router.post("/conversation/respond", response_model=ConversationResponse)
 async def respond_to_conversation(request: ConversationRequest):
     """
-    Process user response with unified orchestrator
-    CORREÇÃO: Agora é o único ponto de criação de sessão
+    Process user response in web chat flow.
+    This is for the landing page chat - independent flow that ends with lawyer notification.
     """
     try:
         # Generate session ID if not provided
         if not request.session_id:
             request.session_id = str(uuid.uuid4())
-            logger.info(f"🆕 Generated new web session: {request.session_id}")
+            logger.info(f"🆕 Generated new web chat session: {request.session_id}")
 
-        logger.info(f"📝 Processing web response | session={request.session_id} | msg='{request.message[:50]}...'")
+        logger.info(f"📝 Processing web chat response | session={request.session_id} | msg='{request.message[:50]}...'")
 
-        # CORREÇÃO: Única chamada para o orchestrator - ele criará a sessão se necessário
+        # Process message through orchestrator for web chat flow
         result = await intelligent_orchestrator.process_message(
             request.message,
             request.session_id,
@@ -94,16 +93,13 @@ async def respond_to_conversation(request: ConversationRequest):
             response=result.get("response", "Como posso ajudá-lo?"),
             ai_mode=result.get("ai_mode", False),
             flow_completed=result.get("flow_completed", False),
-            phone_collected=result.get("phone_submitted", False),
-            lead_data=result.get("lead_data", {}),
+            phone_collected=result.get("phone_collected", False),
             message_count=result.get("message_count", 1)
         )
         
         # Log completion status
         if response_data.flow_completed:
-            logger.info(f"🎉 Web flow completed | session={request.session_id}")
-        if response_data.phone_collected:
-            logger.info(f"📱 Phone collected via web | session={request.session_id}")
+            logger.info(f"🎉 Web chat flow completed - lawyers notified | session={request.session_id}")
         
         return JSONResponse(
             content=response_data.dict(),
@@ -116,10 +112,10 @@ async def respond_to_conversation(request: ConversationRequest):
         )
 
     except Exception as e:
-        logger.error(f"❌ Error processing web response | session={getattr(request, 'session_id', 'unknown')}: {str(e)}")
+        logger.error(f"❌ Error processing web chat response | session={getattr(request, 'session_id', 'unknown')}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process conversation response: {str(e)}"
+            detail=f"Failed to process chat response: {str(e)}"
         )
 
 
