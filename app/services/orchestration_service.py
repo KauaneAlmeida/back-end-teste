@@ -167,257 +167,6 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
 
         return strategic_message
 
-    async def should_notify_lawyers(self, session_data: Dict[str, Any], platform: str) -> Dict[str, Any]:
-        """
-        🧠 LÓGICA INTELIGENTE DE NOTIFICAÇÃO
-        
-        Decide quando notificar advogados baseado na plataforma e qualificação do lead
-        Evita notificações prematuras e spam para a equipe jurídica
-        """
-        try:
-            # Verificar se já foram notificados
-            if session_data.get("lawyers_notified", False):
-                return {
-                    "should_notify": False,
-                    "reason": "already_notified",
-                    "message": "Advogados já foram notificados anteriormente"
-                }
-            
-            lead_data = session_data.get("lead_data", {})
-            message_count = session_data.get("message_count", 0)
-            current_step = session_data.get("current_step", "")
-            flow_completed = session_data.get("flow_completed", False)
-            
-            # CRITÉRIOS POR PLATAFORMA
-            if platform == "web":
-                # Web Chat - critérios mais rigorosos (usuário já completou fluxo na página)
-                required_fields = ["identification", "contact_info", "area_qualification", "case_details"]
-                has_required_fields = all(lead_data.get(field) for field in required_fields)
-                
-                criteria_met = (
-                    flow_completed and 
-                    has_required_fields and
-                    len(lead_data.get("identification", "").strip()) >= 3 and  # Nome mínimo
-                    len(lead_data.get("case_details", "").strip()) >= 15  # Detalhes mínimos
-                )
-                
-                qualification_score = self._calculate_qualification_score(lead_data, platform)
-                
-                if criteria_met and qualification_score >= 0.8:
-                    return {
-                        "should_notify": True,
-                        "reason": "web_flow_completed",
-                        "qualification_score": qualification_score,
-                        "message": f"Lead web qualificado - Score: {qualification_score:.2f}"
-                    }
-                
-            elif platform == "whatsapp":
-                # WhatsApp - critérios adaptados para conversação mais natural
-                required_fields = ["identification", "contact_info", "area_qualification"]
-                has_required_fields = all(lead_data.get(field) for field in required_fields)
-                
-                # Critérios para WhatsApp
-                engagement_criteria = (
-                    message_count >= 4 and  # Pelo menos 4 interações
-                    has_required_fields and
-                    len(lead_data.get("identification", "").strip()) >= 3 and  # Nome válido
-                    len(lead_data.get("area_qualification", "").strip()) >= 3  # Área identificada
-                )
-                
-                # Verificar se chegou no step de detalhes ou confirmação
-                advanced_step = current_step in ["step4_details", "step5_confirmation", "completed"]
-                
-                qualification_score = self._calculate_qualification_score(lead_data, platform)
-                
-                if engagement_criteria and advanced_step and qualification_score >= 0.7:
-                    return {
-                        "should_notify": True,
-                        "reason": "whatsapp_qualified",
-                        "qualification_score": qualification_score,
-                        "engagement_level": message_count,
-                        "current_step": current_step,
-                        "message": f"Lead WhatsApp qualificado - Score: {qualification_score:.2f}, Step: {current_step}"
-                    }
-            
-            # Não qualificado ainda
-            return {
-                "should_notify": False,
-                "reason": "not_qualified_yet",
-                "qualification_score": self._calculate_qualification_score(lead_data, platform),
-                "missing_criteria": self._get_missing_criteria(session_data, platform),
-                "message": "Lead ainda não atingiu critérios de qualificação"
-            }
-            
-        except Exception as e:
-            logger.error(f"Erro ao avaliar notificação: {str(e)}")
-            return {
-                "should_notify": False,
-                "reason": "evaluation_error",
-                "error": str(e),
-                "message": "Erro na avaliação - não notificando por segurança"
-            }
-
-    def _calculate_qualification_score(self, lead_data: Dict[str, Any], platform: str) -> float:
-        """Calcula score de qualificação do lead (0.0 a 1.0)"""
-        try:
-            score = 0.0
-            
-            # Nome completo (0.2)
-            name = lead_data.get("identification", "").strip()
-            if len(name) >= 3:
-                score += 0.1
-            if len(name.split()) >= 2:  # Nome e sobrenome
-                score += 0.1
-                
-            # Informações de contato (0.3)
-            contact = lead_data.get("contact_info", "").strip()
-            if contact:
-                score += 0.1
-                # Verificar se tem telefone
-                if re.search(r'\d{10,11}', contact):
-                    score += 0.1
-                # Verificar se tem email
-                if re.search(r'\S+@\S+\.\S+', contact):
-                    score += 0.1
-            
-            # Área jurídica identificada (0.2)
-            area = lead_data.get("area_qualification", "").strip()
-            if area:
-                score += 0.1
-                # Áreas específicas que atendemos
-                if any(keyword in area.lower() for keyword in ["penal", "saude", "saúde", "criminal", "plano"]):
-                    score += 0.1
-            
-            # Detalhes do caso (0.3)
-            details = lead_data.get("case_details", "").strip()
-            if details:
-                score += 0.1
-                if len(details) >= 20:  # Detalhes substanciais
-                    score += 0.1
-                if len(details) >= 50:  # Detalhes completos
-                    score += 0.1
-            
-            return min(score, 1.0)  # Máximo 1.0
-            
-        except Exception as e:
-            logger.error(f"Erro ao calcular score: {str(e)}")
-            return 0.0
-
-    def _get_missing_criteria(self, session_data: Dict[str, Any], platform: str) -> list:
-        """Identifica critérios faltantes para qualificação"""
-        missing = []
-        lead_data = session_data.get("lead_data", {})
-        
-        if not lead_data.get("identification"):
-            missing.append("nome_completo")
-        if not lead_data.get("contact_info"):
-            missing.append("informacoes_contato")
-        if not lead_data.get("area_qualification"):
-            missing.append("area_juridica")
-            
-        if platform == "web":
-            if not lead_data.get("case_details"):
-                missing.append("detalhes_caso")
-            if not session_data.get("flow_completed"):
-                missing.append("fluxo_incompleto")
-        elif platform == "whatsapp":
-            if session_data.get("message_count", 0) < 4:
-                missing.append("engajamento_insuficiente")
-                
-        return missing
-
-    async def notify_lawyers_if_qualified(self, session_id: str, session_data: Dict[str, Any], platform: str) -> Dict[str, Any]:
-        """
-        🎯 MÉTODO PRINCIPAL DE NOTIFICAÇÃO INTELIGENTE
-        
-        Avalia se deve notificar e executa a notificação se qualificado
-        """
-        try:
-            # Avaliar se deve notificar
-            notification_check = await self.should_notify_lawyers(session_data, platform)
-            
-            if not notification_check["should_notify"]:
-                logger.info(f"📊 Não notificando advogados - Session: {session_id} | Razão: {notification_check['reason']}")
-                return {
-                    "notified": False,
-                    "reason": notification_check["reason"],
-                    "details": notification_check
-                }
-            
-            # 🚀 LEAD QUALIFICADO - NOTIFICAR ADVOGADOS
-            lead_data = session_data.get("lead_data", {})
-            user_name = lead_data.get("identification", "Lead Qualificado")
-            area = lead_data.get("area_qualification", "não especificada")
-            case_details = lead_data.get("case_details", "aguardando mais detalhes")
-            contact_info = lead_data.get("contact_info", "")
-            
-            # Extrair telefone
-            phone_clean = lead_data.get("phone", "")
-            if not phone_clean:
-                phone_match = re.search(r'(\d{10,11})', contact_info or "")
-                phone_clean = phone_match.group(1) if phone_match else ""
-            
-            logger.info(f"🚀 NOTIFICANDO ADVOGADOS - Session: {session_id} | Lead: {user_name} | Área: {area} | Platform: {platform}")
-            
-            try:
-                notification_result = await lawyer_notification_service.notify_lawyers_of_new_lead(
-                    lead_name=user_name,
-                    lead_phone=phone_clean,
-                    category=area,
-                    additional_info={
-                        "case_details": case_details,
-                        "contact_info": contact_info,
-                        "email": lead_data.get("email", ""),
-                        "urgency": "high" if platform == "whatsapp" else "normal",
-                        "platform": platform,
-                        "qualification_score": notification_check.get("qualification_score", 0),
-                        "session_id": session_id,
-                        "engagement_level": session_data.get("message_count", 0),
-                        "current_step": session_data.get("current_step", ""),
-                        "lead_source": f"{platform}_qualified_lead"
-                    }
-                )
-                
-                if notification_result.get("success"):
-                    # Marcar como notificado
-                    session_data["lawyers_notified"] = True
-                    session_data["lawyers_notified_at"] = ensure_utc(datetime.now(timezone.utc))
-                    await save_user_session(session_id, session_data)
-                    
-                    logger.info(f"✅ Advogados notificados com sucesso - Session: {session_id}")
-                    
-                    return {
-                        "notified": True,
-                        "success": True,
-                        "platform": platform,
-                        "qualification_score": notification_check.get("qualification_score"),
-                        "notification_result": notification_result
-                    }
-                else:
-                    logger.error(f"❌ Falha na notificação dos advogados - Session: {session_id}")
-                    return {
-                        "notified": True,
-                        "success": False,
-                        "error": "notification_failed",
-                        "details": notification_result
-                    }
-                    
-            except Exception as notification_error:
-                logger.error(f"❌ Erro ao notificar advogados - Session: {session_id}: {str(notification_error)}")
-                return {
-                    "notified": True,
-                    "success": False,
-                    "error": "notification_exception",
-                    "exception": str(notification_error)
-                }
-                
-        except Exception as e:
-            logger.error(f"❌ Erro na lógica de notificação - Session: {session_id}: {str(e)}")
-            return {
-                "notified": False,
-                "error": "notification_logic_error",
-                "exception": str(e)
-            }
 
     async def get_gemini_health_status(self) -> Dict[str, Any]:
         try:
@@ -460,7 +209,7 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
                     "fallback_mode": firebase_healthy and not ai_healthy,
                     "whatsapp_integration": True,
                     "lead_collection": firebase_healthy,
-                    "intelligent_notifications": True
+                    "lawyer_notifications": True
                 },
                 "gemini_available": self.gemini_available,
                 "fallback_mode": not self.gemini_available
@@ -488,7 +237,6 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
                 "message_count": 0,
                 "flow_completed": False,
                 "phone_submitted": False,
-                "lawyers_notified": False,  # 🎯 NOVO: Flag para controlar notificações
                 "last_updated": ensure_utc(datetime.now(timezone.utc)),
                 "first_interaction": True
             }
@@ -559,7 +307,7 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
         return phone, email
 
     async def _process_conversation_flow(self, session_data: Dict[str, Any], message: str) -> str:
-        """Processar fluxo conversacional humanizado com notificação inteligente"""
+        """Processar fluxo conversacional humanizado"""
         try:
             session_id = session_data["session_id"]
             current_step = session_data.get("current_step", "step1_name")
@@ -612,11 +360,6 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
                 
                 session_data["lead_data"] = lead_data
                 
-                # 🎯 VERIFICAR SE DEVE NOTIFICAR ADVOGADOS (antes de avançar)
-                notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, platform)
-                if notification_result.get("notified") and notification_result.get("success"):
-                    logger.info(f"✅ Advogados notificados durante fluxo - Step: {current_step}, Session: {session_id}")
-                
                 # Avançar para próximo step
                 next_step = step_config["next_step"]
                 
@@ -667,7 +410,7 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
             return message
 
     async def _handle_lead_finalization(self, session_id: str, session_data: Dict[str, Any]) -> str:
-        """🎯 FINALIZAÇÃO INTELIGENTE COM MENSAGEM ESTRATÉGICA"""
+        """Finalização do fluxo com notificação de advogados"""
         try:
             logger.info(f"Lead finalization for session: {session_id}")
             
@@ -700,8 +443,33 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
             
             await save_user_session(session_id, session_data)
 
-            # 🚀 NOTIFICAR ADVOGADOS SE AINDA NÃO FORAM NOTIFICADOS
-            notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, platform)
+            # 🚀 NOTIFICAR ADVOGADOS via lawyer_notification_service
+            try:
+                area = lead_data.get("area_qualification", "direito")
+                case_details = lead_data.get("case_details", "")
+                contact_info = lead_data.get("contact_info", "")
+                
+                notification_result = await lawyer_notification_service.notify_lawyers_of_new_lead(
+                    lead_name=user_name,
+                    lead_phone=phone_clean,
+                    category=area,
+                    additional_info={
+                        "case_details": case_details,
+                        "contact_info": contact_info,
+                        "email": lead_data.get("email", ""),
+                        "platform": platform,
+                        "session_id": session_id,
+                        "lead_source": f"{platform}_completed_flow"
+                    }
+                )
+                
+                if notification_result.get("success"):
+                    logger.info(f"✅ Advogados notificados - Session: {session_id}")
+                else:
+                    logger.error(f"❌ Falha na notificação - Session: {session_id}")
+                    
+            except Exception as notification_error:
+                logger.error(f"❌ Erro ao notificar advogados: {str(notification_error)}")
             
             # Salvar lead data
             try:
@@ -741,23 +509,10 @@ Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
             except Exception as whatsapp_error:
                 logger.error(f"❌ Erro ao enviar WhatsApp estratégico: {str(whatsapp_error)}")
 
-            # 🎯 MENSAGEM FINAL PERSONALIZADA
-            notification_status = ""
-            if notification_result.get("notified") and notification_result.get("success"):
-                notification_status = " ⚡ Nossa equipe foi imediatamente notificada!"
-            
+            # 🎯 MENSAGEM FINAL
             final_message = f"""Perfeito, {first_name}! ✅
 
-Todas suas informações foram registradas com sucesso{notification_status}
-
-Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso com toda atenção necessária.
-
-{'📱 Mensagem de confirmação enviada no seu WhatsApp!' if whatsapp_success else '📝 Suas informações foram salvas com segurança.'}
-
-Você fez a escolha certa ao confiar no escritório m.lima para cuidar do seu caso! 🤝
-
-Em alguns minutos, um especialista entrará em contato."""
-
+Todas suas informações foram registradas com sucesso e nossa equipe foi notificada!
             return final_message
             
         except Exception as e:
@@ -765,6 +520,7 @@ Em alguns minutos, um especialista entrará em contato."""
             user_name = session_data.get("lead_data", {}).get("identification", "")
             first_name = user_name.split()[0] if user_name else ""
             return f"Obrigado pelas informações, {first_name}! Nossa equipe entrará em contato em breve. 😊"
+Você fez a escolha certa ao confiar no escritório m.lima! 🤝"""
 
     async def _handle_phone_collection(self, phone_message: str, session_id: str, session_data: Dict[str, Any]) -> str:
         """Coleta de telefone com toque humano"""
@@ -793,8 +549,8 @@ Em alguns minutos, um especialista entrará em contato."""
 
             session_data = await self._get_or_create_session(session_id, platform, phone_number)
             
-            # Tratar coleta de telefone para leads qualificados
-            if (session_data.get("lead_qualified", False) and 
+    async def process_message(self, message: str, session_id: str, phone_number: Optional[str] = None, platform: str = "web") -> Dict[str, Any]:
+        """Processamento principal de mensagens"""
                 not session_data.get("phone_submitted", False) and 
                 self._is_phone_number(message)):
                 
@@ -832,12 +588,8 @@ Em alguns minutos, um especialista entrará em contato."""
                 )
             }
             
-            # ✅ GARANTIR QUE RESPONSE SEMPRE EXISTE E É STRING
             if not result.get("response") or not isinstance(result["response"], str):
-                result["response"] = "Como posso ajudá-lo hoje?"
-                logger.warning(f"⚠️ Response vazio corrigido para session {session_id}")
-            
-            return result
+                "message_count": session_data.get("message_count", 1)
 
         except Exception as e:
             logger.error(f"Exception in process_message: {str(e)}")
@@ -978,7 +730,9 @@ Para darmos continuidade ao seu atendimento de forma personalizada, responda est
             logger.error(f"Error getting session context: {str(e)}")
             return {"exists": False, "error": str(e)}
 
+Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso.
 
+{'📱 Mensagem de confirmação enviada no seu WhatsApp!' if whatsapp_success else '📝 Suas informações foram salvas com segurança.'}
 # Global instance
 intelligent_orchestrator = IntelligentHybridOrchestrator()
 hybrid_orchestrator = intelligent_orchestrator
