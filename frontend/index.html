@@ -224,33 +224,34 @@
           formattedPhone = '55' + formattedPhone;
         }
         
-        console.log('📱 Enviando mensagem inicial WhatsApp...');
+        console.log('📱 Triggering WhatsApp flow...');
         
-        // Gatilho simples para WhatsApp
+        // Simple trigger to Orchestrator
         fetch(`${API_BASE_URL}/api/v1/whatsapp/send-initial-message`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name: userName,
             phone: formattedPhone,
-            session_id: sessionId
+            session_id: sessionId,
+            email: leadData.email || ''
           })
         })
         .then(response => {
           if (response.ok) {
-            console.log('✅ Mensagem WhatsApp enviada');
-            addMessage(`📱 Perfeito, ${userName.split()[0]}! Enviamos uma mensagem para seu WhatsApp. Responda lá para continuar! 🚀`, 'bot');
+            console.log('✅ WhatsApp trigger sent to Orchestrator');
+            addMessage(`📱 Perfeito, ${userName.split()[0]}! Enviamos uma mensagem para seu WhatsApp. Responda lá para continuar com nossos especialistas! 🚀`, 'bot');
           } else {
-            addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve.', 'bot');
+            addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve. 📞', 'bot');
           }
         })
         .catch(() => {
-          addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve.', 'bot');
+          addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve. 📞', 'bot');
         });
         
       } catch (error) {
-        console.error('❌ Erro WhatsApp:', error);
-        addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve.', 'bot');
+        console.error('❌ WhatsApp trigger error:', error);
+        addMessage('✅ Suas informações foram registradas! Nossa equipe entrará em contato em breve. 📞', 'bot');
       }
     }
 

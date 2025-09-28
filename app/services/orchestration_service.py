@@ -851,10 +851,9 @@ Em alguns minutos, um especialista entrará em contato."""
 
     async def handle_whatsapp_authorization(self, auth_data: Dict[str, Any]):
         """
-        🎯 HANDLER PARA AUTORIZAÇÃO WHATSAPP
+        Handler for WhatsApp authorization from landing page.
         
-        Chamado quando um número é autorizado para usar WhatsApp
-        Prepara o sistema para receber mensagens desse usuário
+        Called when user completes landing page form - triggers initial WhatsApp message.
         """
         try:
             session_id = auth_data.get("session_id", "")
@@ -862,59 +861,75 @@ Em alguns minutos, um especialista entrará em contato."""
             source = auth_data.get("source", "unknown")
             user_data = auth_data.get("user_data", {})
             
-            logger.info(f"🎯 Processando autorização WhatsApp - Session: {session_id}, Phone: {phone_number}, Source: {source}")
+            logger.info(f"Processing WhatsApp authorization - Session: {session_id}, Phone: {phone_number}")
             
-            # Se tem dados do usuário (ex: do chat da landing), criar sessão pré-populada
-            if user_data and source == "landing_chat":
-                session_data = {
-                    "session_id": session_id,
-                    "platform": "whatsapp",
-                    "phone_number": phone_number,
-                    "created_at": ensure_utc(datetime.now(timezone.utc)),
-                    "current_step": "completed",  # Chat já foi completado na landing
-                    "lead_data": {
-                        "identification": user_data.get("name", ""),
-                        "contact_info": f"{phone_number} {user_data.get('email', '')}".strip(),
-                        "area_qualification": "não especificada",
-                        "case_details": user_data.get("problem", "Detalhes do chat da landing"),
-                        "phone": phone_number,
-                        "email": user_data.get("email", "")
-                    },
-                    "message_count": 1,
-                    "flow_completed": True,
-                    "phone_submitted": True,
-                    "lead_qualified": True,
-                    "lawyers_notified": False,  # Ainda não notificou - vai notificar agora
-                    "last_updated": ensure_utc(datetime.now(timezone.utc)),
-                    "first_interaction": False,
-                    "authorization_source": source
-                }
-                
-                await save_user_session(session_id, session_data)
-                
-                # Notificar advogados imediatamente para leads da landing
-                notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, "whatsapp")
-                
-                logger.info(f"✅ Sessão pré-populada criada para lead da landing - Session: {session_id}")
-                
+            # Create WhatsApp session for future messages
+            session_data = {
+                "session_id": session_id,
+                "platform": "whatsapp", 
+                "phone_number": phone_number,
+                "created_at": ensure_utc(datetime.now(timezone.utc)),
+                "current_step": "step1_name",
+                "lead_data": {},
+                "message_count": 0,
+                "flow_completed": False,
+                "phone_submitted": False,
+                "lawyers_notified": False,
+                "last_updated": ensure_utc(datetime.now(timezone.utc)),
+                "first_interaction": True,
+                "authorization_source": source
+            }
+            
+            await save_user_session(session_id, session_data)
+            
+            # Send initial strategic WhatsApp message
+            user_name = user_data.get("name", "Cliente")
+            initial_message = self._get_strategic_initial_message(user_name, session_id)
+            
+            # Format phone for WhatsApp
+            phone_formatted = self._format_brazilian_phone(phone_number)
+            whatsapp_number = f"{phone_formatted}@s.whatsapp.net"
+            
+            # Send via Baileys service
+            message_sent = await baileys_service.send_whatsapp_message(whatsapp_number, initial_message)
+            
+            if message_sent:
+                logger.info(f"Initial WhatsApp message sent successfully to {phone_number}")
             else:
-                # Autorização de botão - criar sessão vazia para futuras mensagens
-                logger.info(f"📝 Autorização de botão registrada - Session: {session_id} - Aguardando primeira mensagem")
+                logger.error(f"Failed to send initial WhatsApp message to {phone_number}")
             
             return {
                 "status": "authorization_processed",
                 "session_id": session_id,
                 "phone_number": phone_number,
                 "source": source,
-                "pre_populated": bool(user_data and source == "landing_chat")
+                "message_sent": message_sent
             }
             
         except Exception as e:
-            logger.error(f"❌ Erro no processamento da autorização WhatsApp: {str(e)}")
+            logger.error(f"Error processing WhatsApp authorization: {str(e)}")
             return {
                 "status": "authorization_error",
                 "error": str(e)
             }
+    
+    def _get_strategic_initial_message(self, user_name: str, session_id: str) -> str:
+        """Generate strategic initial WhatsApp message with session_id."""
+        first_name = user_name.split()[0] if user_name else "Cliente"
+        
+        return f"""Olá {first_name}! 👋
+
+Obrigado por entrar em contato com o escritório m.lima através do nosso site.
+
+Recebemos suas informações e nossa equipe especializada está pronta para te ajudar com seu caso jurídico.
+
+Para darmos continuidade ao seu atendimento de forma personalizada, responda esta mensagem com mais detalhes sobre sua situação.
+
+🆔 Sessão: {session_id}
+
+---
+✉️ m.lima Advogados Associados
+📱 Atendimento prioritário ativado"""
 
     async def handle_phone_number_submission(self, phone_number: str, session_id: str) -> Dict[str, Any]:
         """Handle phone number submission from web interface."""

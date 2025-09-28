@@ -254,6 +254,10 @@ async def whatsapp_webhook(request: Request):
 
 @router.post("/whatsapp/send-initial-message")
 async def send_initial_whatsapp_message(request: dict):
+    """
+    Trigger endpoint: receives landing page data and delegates to Orchestrator.
+    Orchestrator handles authorization, message sending, and flow management.
+    """
     try:
         user_name = request.get("name", "").strip()
         user_phone = request.get("phone", "").strip()
@@ -264,8 +268,9 @@ async def send_initial_whatsapp_message(request: dict):
         
         validated_phone = validate_phone_number(user_phone)
         
-        logger.info(f"🚀 Gatilho ativado: {user_name} | {validated_phone} | {session_id}")
+        logger.info(f"Landing page trigger: {user_name} | {validated_phone} | {session_id}")
         
+        # Delegate everything to Orchestrator
         orchestrator_result = await intelligent_orchestrator.handle_whatsapp_authorization({
             "session_id": session_id,
             "phone_number": validated_phone,
@@ -274,15 +279,14 @@ async def send_initial_whatsapp_message(request: dict):
                 "name": user_name,
                 "phone": validated_phone,
                 "email": request.get("email", ""),
-                "problem": request.get("problem", "Solicitação via landing page")
             }
         })
         
-        logger.info(f"✅ Orchestrator ativado: {orchestrator_result.get('status', 'processed')}")
+        logger.info(f"Orchestrator result: {orchestrator_result.get('status', 'processed')}")
         
         return {
             "status": "success",
-            "message": "Lead enviado para Orchestrator - mensagem estratégica será enviada",
+            "message": "Trigger sent to Orchestrator - strategic message will be sent",
             "phone": validated_phone,
             "session_id": session_id,
             "orchestrator_result": orchestrator_result
@@ -291,7 +295,7 @@ async def send_initial_whatsapp_message(request: dict):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Erro no gatilho WhatsApp: {str(e)}")
+        logger.error(f"Error in WhatsApp trigger: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # =================== AUTORIZAÇÃO ===================
