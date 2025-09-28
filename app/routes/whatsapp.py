@@ -113,41 +113,80 @@ def validate_session_id(session_id: str) -> str:
         logger.error(f"❌ Session ID validation error: {str(e)}")
         raise ValueError(f"Invalid session ID: {session_id}")
 
-# =================== FUNÇÕES DE AUTORIZAÇÃO ===================
+# =================== FUNÇÕES DE AUTORIZAÇÃO POR SESSION_ID ===================
 
-async def is_phone_authorized(phone_number: str) -> Dict[str, Any]:
+def extract_session_from_message(message: str) -> Optional[str]:
     """
-    Verifica se um número de telefone está autorizado
-    Retorna dict com informações de autorização
+    Extrai session_id da mensagem do usuário.
+    Procura por padrões como: whatsapp_1234567890_abc123, session_abc123, etc.
     """
     try:
-        validated_phone = validate_phone_number(phone_number)
+        if not message:
+            return None
+            
+        # Padrões de session_id que podem aparecer na mensagem
+        patterns = [
+            r'whatsapp_\w+_\w+',  # whatsapp_1234567890_abc123
+            r'session_[\w-]+',     # session_abc123
+            r'web_\d+',           # web_1234567890
+            r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',  # UUID format
+        ]
         
-        # Buscar autorização no Firebase
-        auth_data = await get_user_session(f"whatsapp_auth:{validated_phone}")
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                session_id = match.group(0)
+                logger.info(f"🔍 Session ID extraído da mensagem: {session_id}")
+                return session_id
+                
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao extrair session_id: {str(e)}")
+        return None
+
+async def is_session_authorized(session_id: str) -> Dict[str, Any]:
+    """
+    Verifica se um session_id está autorizado para usar WhatsApp.
+    """
+    try:
+        if not session_id:
+            return {
+                "authorized": False,
+                "action": "IGNORE_COMPLETELY",
+                "reason": "no_session_id"
+            }
+            
+        # Buscar autorização no Firebase usando session_id
+        auth_data = await get_user_session(f"whatsapp_auth_session:{session_id}")
         
         if not auth_data:
             return {
                 "authorized": False,
-                "action": "IGNORE_COMPLETELY",
-                "reason": "not_authorized"
+                "action": "IGNORE_COMPLETELY", 
+                "reason": "session_not_authorized"
             }
         
         # Verificar expiração
-        expires_at = datetime.fromisoformat(auth_data.get("expires_at", ""))
-        is_expired = datetime.utcnow() > expires_at
-        
-        if is_expired:
-            return {
-                "authorized": False,
-                "action": "IGNORE_COMPLETELY",
-                "reason": "expired"
-            }
+        expires_at_str = auth_data.get("expires_at", "")
+        if expires_at_str:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+                is_expired = datetime.now(expires_at.tzinfo) > expires_at
+                
+                if is_expired:
+                    return {
+                        "authorized": False,
+                        "action": "IGNORE_COMPLETELY",
+                        "reason": "session_expired"
+                    }
+            except Exception as date_error:
+                logger.warning(f"⚠️ Erro ao verificar expiração: {str(date_error)}")
         
         return {
             "authorized": True,
             "action": "RESPOND",
-            "session_id": auth_data.get("session_id"),
+            "session_id": session_id,
             "source": auth_data.get("source"),
             "user_data": auth_data.get("user_data", {}),
             "authorized_at": auth_data.get("authorized_at"),
@@ -155,7 +194,7 @@ async def is_phone_authorized(phone_number: str) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"❌ Erro ao verificar autorização: {str(e)}")
+        logger.error(f"❌ Erro ao verificar autorização da sessão: {str(e)}")
         return {
             "authorized": False,
             "action": "IGNORE_COMPLETELY",
@@ -163,17 +202,28 @@ async def is_phone_authorized(phone_number: str) -> Dict[str, Any]:
             "error": str(e)
         }
 
-async def save_authorization(phone_number: str, auth_data: Dict[str, Any]):
+async def save_session_authorization(session_id: str, auth_data: Dict[str, Any]):
     """
-    Salva autorização no Firebase (função auxiliar)
+    Salva autorização de sessão no Firebase.
     """
     try:
-        validated_phone = validate_phone_number(phone_number)
-        await save_user_session(f"whatsapp_auth:{validated_phone}", auth_data)
-        logger.info(f"✅ Autorização salva: {validated_phone}")
+        await save_user_session(f"whatsapp_auth_session:{session_id}", auth_data)
+        logger.info(f"✅ Autorização de sessão salva: {session_id}")
     except Exception as e:
-        logger.error(f"❌ Erro ao salvar autorização: {str(e)}")
+        logger.error(f"❌ Erro ao salvar autorização de sessão: {str(e)}")
         raise
+
+# =================== FUNÇÕES DE AUTORIZAÇÃO ===================
+
+# Manter função legada para compatibilidade (DEPRECIADA)
+async def is_phone_authorized(phone_number: str) -> Dict[str, Any]:
+    """DEPRECIADA: Use is_session_authorized() em vez desta função"""
+    logger.warning("⚠️ is_phone_authorized() está DEPRECIADA - use is_session_authorized()")
+    return {
+        "authorized": False,
+        "action": "IGNORE_COMPLETELY",
+        "reason": "deprecated_phone_auth"
+    }
 
 # =================== WEBHOOK PRINCIPAL ===================
 
@@ -193,12 +243,11 @@ async def verify_whatsapp_webhook(request: Request):
     
     logger.warning("⚠️ WhatsApp webhook verification failed")
     return PlainTextResponse("Forbidden", status_code=403)
-# PATCH para whatsapp.py - SUBSTITUIR o webhook POST completo
 
 @router.post("/whatsapp/webhook")
 async def whatsapp_webhook(request: Request):
     """
-    🔧 WEBHOOK CORRIGIDO - SEMPRE RETORNA CAMPO 'response'
+    🔧 WEBHOOK CORRIGIDO - AUTORIZAÇÃO POR SESSION_ID
     """
     try:
         payload = await request.json()
@@ -221,26 +270,40 @@ async def whatsapp_webhook(request: Request):
                 "response": "Erro: mensagem inválida"  # ✅ SEMPRE TEM RESPONSE
             }
 
-        logger.info(f"🔍 Verificando autorização | phone={clean_phone} | msg='{message_text[:50]}...'")
+        logger.info(f"🔍 Verificando autorização por session_id | phone={clean_phone} | msg='{message_text[:50]}...'")
 
-        # VERIFICAÇÃO DE AUTORIZAÇÃO
-        auth_check = await is_phone_authorized(clean_phone)
+        # 🔧 NOVA LÓGICA: EXTRAIR SESSION_ID DA MENSAGEM
+        session_id = extract_session_from_message(message_text)
         
-        if not auth_check["authorized"]:
-            reason = auth_check.get("reason", "unknown")
-            logger.info(f"❌ IGNORANDO mensagem de {clean_phone} - Razão: {reason}")
-            
+        if not session_id:
+            logger.info(f"❌ IGNORANDO mensagem de {clean_phone} - Nenhum session_id encontrado na mensagem")
             return {
                 "status": "ignored",
                 "phone_number": clean_phone,
                 "message_id": message_id,
                 "action": "IGNORE_COMPLETELY",
+                "reason": "no_session_id_in_message",
+                "response": ""
+            }
+        
+        # VERIFICAÇÃO DE AUTORIZAÇÃO POR SESSION_ID
+        auth_check = await is_session_authorized(session_id)
+        
+        if not auth_check["authorized"]:
+            reason = auth_check.get("reason", "unknown")
+            logger.info(f"❌ IGNORANDO mensagem de {clean_phone} - Session: {session_id} - Razão: {reason}")
+            
+            return {
+                "status": "ignored",
+                "phone_number": clean_phone,
+                "session_id": session_id,
+                "message_id": message_id,
+                "action": "IGNORE_COMPLETELY",
                 "reason": reason,
-                "response": ""  # ✅ CAMPO VAZIO MAS EXISTE - BOT NÃO ENVIARÁ NADA
+                "response": ""
             }
 
-        # ✅ NÚMERO AUTORIZADO - DELEGAR TUDO PARA ORCHESTRATOR
-        session_id = auth_check.get("session_id", f"whatsapp_{clean_phone}")
+        # ✅ SESSION_ID AUTORIZADO - DELEGAR TUDO PARA ORCHESTRATOR
         source = auth_check.get("source", "unknown")
         user_data = auth_check.get("user_data", {})
         lead_type = auth_check.get("lead_type", "continuous_chat")
@@ -255,18 +318,18 @@ async def whatsapp_webhook(request: Request):
             platform="whatsapp"
         )
         
-        # ✅ EXTRAIR RESPONSE DO ORCHESTRATOR COM VALIDAÇÃO
+        # EXTRAIR RESPONSE DO ORCHESTRATOR COM VALIDAÇÃO
         ai_response = orchestrator_response.get("response", "")
         response_type = orchestrator_response.get("response_type", "orchestrated")
         
-        # ✅ GARANTIR QUE RESPONSE NUNCA ESTÁ VAZIO - CORRIGIDO
+        # GARANTIR QUE RESPONSE NUNCA ESTÁ VAZIO
         if not ai_response or not isinstance(ai_response, str) or ai_response.strip() == "":
             ai_response = "Obrigado pela sua mensagem! Nossa equipe entrará em contato em breve."
             logger.warning(f"⚠️ Orchestrator response vazio ou inválido, usando fallback: {ai_response}")
         
         logger.info(f"✅ Response para bot WhatsApp: '{ai_response[:50]}...'")
         
-        # ✅ RESPOSTA FINAL COM CAMPO 'response' GARANTIDO
+        # RESPOSTA FINAL COM CAMPO 'response' GARANTIDO
         final_response = {
             "status": "success",
             "message_id": message_id,
@@ -275,8 +338,7 @@ async def whatsapp_webhook(request: Request):
             "source": source,
             "lead_type": lead_type,
             "authorized": True,
-            "response": ai_response,  # ✅ CAMPO OBRIGATÓRIO SEMPRE PREENCHIDO
-            # Campos extras do orchestrator (opcionais)
+            "response": ai_response,
             "response_type": response_type,
             "current_step": orchestrator_response.get("current_step", ""),
             "message_count": orchestrator_response.get("message_count", 1)
@@ -289,15 +351,16 @@ async def whatsapp_webhook(request: Request):
     except Exception as e:
         logger.error(f"❌ WhatsApp webhook error: {str(e)}")
         
-        # ✅ MESMO EM ERRO, SEMPRE RETORNA RESPONSE - GARANTIDO
+        # MESMO EM ERRO, SEMPRE RETORNA RESPONSE
         return {
             "status": "error",
             "message": str(e),
             "response_type": "error_message",
-            "response": "Desculpe, ocorreu um erro temporário. Tente novamente em alguns minutos.",  # ✅ SEMPRE TEM RESPONSE
+            "response": "Desculpe, ocorreu um erro temporário. Tente novamente em alguns minutos.",
             "phone_number": clean_phone if 'clean_phone' in locals() else "",
             "message_id": message_id if 'message_id' in locals() else ""
         }
+
 # =================== ROTAS DE AUTORIZAÇÃO ===================
 
 @router.post("/whatsapp/authorize")
@@ -306,11 +369,11 @@ async def authorize_whatsapp_session(
     background_tasks: BackgroundTasks
 ):
     """
-    Autorização de sessão WhatsApp.
+    Autorização de sessão WhatsApp - CORRIGIDA PARA SESSION_ID.
     
-    FLUXO SIMPLIFICADO:
+    NOVO FLUXO:
     1. Valida dados
-    2. Salva autorização no Firebase
+    2. Salva autorização por session_id no Firebase
     3. DELEGA todo processamento para orchestration_service
     """
     try:
@@ -333,14 +396,13 @@ async def authorize_whatsapp_session(
             "user_agent": request.user_agent,
             "page_url": request.page_url,
             "timestamp": request.timestamp,
-            # Definir tipo de lead baseado na origem
             "lead_type": "landing_chat_lead" if request.source == "landing_chat" else "whatsapp_button_lead"
         }
         
-        # 3. Salvar autorização (background task)
-        background_tasks.add_task(save_authorization, validated_phone, authorization_data)
+        # 3. Salvar autorização por session_id (background task)
+        background_tasks.add_task(save_session_authorization, validated_session, authorization_data)
         
-        # 4. DELEGAR processamento para orchestration_service (CORRIGIDO)
+        # 4. DELEGAR processamento para orchestration_service
         auth_data_for_orchestrator = {
             "session_id": validated_session,
             "phone_number": validated_phone,
@@ -361,7 +423,7 @@ async def authorize_whatsapp_session(
         }
         source_msg = source_descriptions.get(request.source, request.source)
         
-        logger.info(f"✅ Autorização criada e delegada | Origem: {source_msg} | Phone: {validated_phone}")
+        logger.info(f"✅ Autorização criada e delegada | Session: {validated_session} | Origem: {source_msg}")
         
         # 6. Resposta
         return WhatsAppAuthorizationResponse(
@@ -369,7 +431,7 @@ async def authorize_whatsapp_session(
             session_id=validated_session,
             phone_number=validated_phone,
             source=request.source,
-            message=f"Sessão autorizada - {source_msg}. Processamento delegado ao orchestrator.",
+            message=f"Sessão {validated_session} autorizada - {source_msg}. Usuário deve incluir session_id nas mensagens.",
             timestamp=datetime.utcnow().isoformat(),
             expires_in=expires_in,
             whatsapp_url=f"https://wa.me/{validated_phone}"
@@ -385,30 +447,29 @@ async def authorize_whatsapp_session(
 
 # =================== ROTAS DE CONSULTA ===================
 
-@router.get("/whatsapp/check-auth/{phone_number}")
-async def check_whatsapp_authorization(phone_number: str):
+@router.get("/whatsapp/check-auth/{session_id}")
+async def check_whatsapp_authorization(session_id: str):
     """
-    Verifica se um número de telefone está autorizado
+    Verifica se um session_id está autorizado
     """
     try:
-        logger.info(f"📱 Verificando autorização: {phone_number}")
+        logger.info(f"📱 Verificando autorização: {session_id}")
         
-        auth_check = await is_phone_authorized(phone_number)
-        validated_phone = validate_phone_number(phone_number)
+        auth_check = await is_session_authorized(session_id)
         
         status_msg = "AUTORIZADO - Bot pode responder" if auth_check["authorized"] else "NÃO AUTORIZADO - Bot vai ignorar"
-        logger.info(f"{'✅' if auth_check['authorized'] else '❌'} {status_msg}: {validated_phone}")
+        logger.info(f"{'✅' if auth_check['authorized'] else '❌'} {status_msg}: {session_id}")
         
         return {
-            "phone_number": validated_phone,
+            "session_id": session_id,
             **auth_check,
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"❌ Erro ao verificar telefone: {str(e)}")
+        logger.error(f"❌ Erro ao verificar sessão: {str(e)}")
         return {
-            "phone_number": phone_number,
+            "session_id": session_id,
             "authorized": False,
             "action": "IGNORE_COMPLETELY",
             "reason": "error",
@@ -416,21 +477,21 @@ async def check_whatsapp_authorization(phone_number: str):
             "timestamp": datetime.utcnow().isoformat()
         }
 
-@router.delete("/whatsapp/revoke-auth/{phone_number}")
-async def revoke_whatsapp_authorization(phone_number: str):
+@router.delete("/whatsapp/revoke-auth/{session_id}")
+async def revoke_whatsapp_authorization(session_id: str):
     """
-    Revoga a autorização de um número de telefone
+    Revoga a autorização de um session_id
     """
     try:
-        validated_phone = validate_phone_number(phone_number)
+        validated_session = validate_session_id(session_id)
         
         # Remover do Firebase
-        await save_user_session(f"whatsapp_auth:{validated_phone}", None)
+        await save_user_session(f"whatsapp_auth_session:{validated_session}", None)
         
-        logger.info(f"🗑️ Autorização revogada: {validated_phone}")
+        logger.info(f"🗑️ Autorização revogada: {validated_session}")
         
         return {
-            "phone_number": validated_phone,
+            "session_id": validated_session,
             "status": "revoked",
             "message": "Autorização removida com sucesso",
             "timestamp": datetime.utcnow().isoformat()
