@@ -366,8 +366,8 @@ async def whatsapp_webhook(request: Request):
 @router.post("/whatsapp/send-initial-message")
 async def send_initial_whatsapp_message(request: dict):
     """
-    Gatilho simples para enviar mensagem inicial no WhatsApp.
-    Toda lógica complexa fica no Orchestrator.
+    Gatilho puro: frontend → backend → Orchestrator → WhatsApp bot.
+    Orchestrator cuida de tudo: mensagem estratégica, fluxo, notificação.
     """
     try:
         user_name = request.get("name", "").strip()
@@ -377,38 +377,38 @@ async def send_initial_whatsapp_message(request: dict):
         if not user_name or not user_phone or not session_id:
             raise HTTPException(status_code=400, detail="Missing required fields")
         
-        # Validar telefone
         validated_phone = validate_phone_number(user_phone)
-        first_name = user_name.split()[0] if user_name else "Cliente"
         
-        # Mensagem simples com session_id
-        initial_message = f"""Olá {first_name}! 👋
-
-Obrigado por entrar em contato com o escritório m.lima.
-
-Para continuar seu atendimento, responda esta mensagem.
-
-🆔 Sessão: {session_id}"""
+        logger.info(f"🚀 Gatilho ativado: {user_name} | {validated_phone} | {session_id}")
         
-        # Enviar via Baileys
-        whatsapp_number = f"{validated_phone}@s.whatsapp.net"
-        success = await baileys_service.send_whatsapp_message(whatsapp_number, initial_message)
-        
-        if success:
-            logger.info(f"✅ Mensagem inicial enviada para {validated_phone}")
-            return {
-                "status": "success",
-                "message": "WhatsApp message sent",
+        # 🎯 DELEGAR TUDO PARA O ORCHESTRATOR
+        # Ele cuida da mensagem estratégica, autorização, fluxo e notificação
+        orchestrator_result = await intelligent_orchestrator.handle_whatsapp_authorization({
+            "session_id": session_id,
+            "phone_number": validated_phone,
+            "source": "landing_chat",
+            "user_data": {
+                "name": user_name,
                 "phone": validated_phone,
-                "session_id": session_id
+                "email": request.get("email", ""),
+                "problem": request.get("problem", "Solicitação via landing page")
             }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to send WhatsApp message")
+        })
+        
+        logger.info(f"✅ Orchestrator ativado: {orchestrator_result.get('status', 'processed')}")
+        
+        return {
+            "status": "success",
+            "message": "Lead enviado para Orchestrator - mensagem estratégica será enviada",
+            "phone": validated_phone,
+            "session_id": session_id,
+            "orchestrator_result": orchestrator_result
+        }
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Erro ao enviar mensagem inicial: {str(e)}")
+        logger.error(f"❌ Erro no gatilho WhatsApp: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/whatsapp/authorize")
