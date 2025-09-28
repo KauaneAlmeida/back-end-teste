@@ -1,29 +1,10 @@
-"""
-Production-Ready Orchestration Service
-
-Refatoração completa para resolver problemas críticos:
-- Fluxo conversacional flexível com extração inteligente de dados
-- Race conditions resolvidas com locks por sessão
-- Error recovery que preserva estado do usuário
-- Memory management com TTL automático
-- Validações robustas com regex patterns
-- Retry logic para notificações críticas
-- Rate limiting e proteção contra spam
-- Logs estruturados com correlation IDs
-"""
-
 import logging
 import json
 import os
 import re
 import asyncio
-import uuid
-from typing import Dict, Any, Optional, Set, Tuple, List
-from datetime import datetime, timezone, timedelta
-from enum import Enum
-from dataclasses import dataclass, asdict
-from contextlib import asynccontextmanager
-
+from typing import Dict, Any, Optional
+from datetime import datetime, timezone
 from app.services.firebase_service import (
     get_user_session,
     save_user_session,
@@ -37,300 +18,52 @@ from app.services.lawyer_notification_service import lawyer_notification_service
 
 logger = logging.getLogger(__name__)
 
-# =================== CONFIGURATION ===================
 
-class Config:
-    """Centralized configuration with environment variable support"""
-    SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "24"))
-    MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", "2000"))
-    RATE_LIMIT_MESSAGES_PER_MINUTE = int(os.getenv("RATE_LIMIT_MESSAGES_PER_MINUTE", "10"))
-    OPERATION_TIMEOUT_SECONDS = int(os.getenv("OPERATION_TIMEOUT_SECONDS", "5"))
-    NOTIFICATION_RETRY_ATTEMPTS = int(os.getenv("NOTIFICATION_RETRY_ATTEMPTS", "3"))
-    LOCK_TIMEOUT_SECONDS = int(os.getenv("LOCK_TIMEOUT_SECONDS", "30"))
-    LAW_FIRM_NUMBER = os.getenv("LAW_FIRM_NUMBER", "+5511918368812")
+def ensure_utc(dt: datetime) -> datetime:
+    if dt is None:
+        return datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
-# =================== ENUMS AND DATA CLASSES ===================
 
-class FlowState(Enum):
-    """Well-defined flow states"""
-    INITIAL = "initial"
-    COLLECTING_DATA = "collecting_data"
-    VALIDATING_DATA = "validating_data"
-    COMPLETED = "completed"
-    ERROR_RECOVERY = "error_recovery"
-
-@dataclass
-class ExtractedData:
-    """Structured data extracted from user messages"""
-    name: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    legal_area: Optional[str] = None
-    urgency_level: str = "normal"
-    case_description: Optional[str] = None
-    confidence_score: float = 0.0
-
-@dataclass
-class SessionContext:
-    """Complete session context with metadata"""
-    session_id: str
-    platform: str
-    state: FlowState
-    extracted_data: ExtractedData
-    message_count: int = 0
-    created_at: datetime = None
-    last_updated: datetime = None
-    error_count: int = 0
-    rate_limit_count: int = 0
-    correlation_id: str = None
-
-    def __post_init__(self):
-        if self.created_at is None:
-            self.created_at = datetime.now(timezone.utc)
-        if self.last_updated is None:
-            self.last_updated = datetime.now(timezone.utc)
-        if self.correlation_id is None:
-            self.correlation_id = str(uuid.uuid4())[:8]
-
-# =================== REGEX PATTERNS ===================
-
-class DataPatterns:
-    """Robust regex patterns for data extraction"""
-    
-    # Brazilian phone patterns (various formats)
-    PHONE_PATTERNS = [
-        r'\b(?:\+?55\s?)?(?:\(?(?:11|12|13|14|15|16|17|18|19|21|22|24|27|28|31|32|33|34|35|37|38|41|42|43|44|45|46|47|48|49|51|53|54|55|61|62|63|64|65|66|67|68|69|71|73|74|75|77|79|81|82|83|84|85|86|87|88|89|91|92|93|94|95|96|97|98|99)\)?\s?)?(?:9\s?)?(?:\d{4}[\s\-]?\d{4})\b',
-        r'\b(?:\+?55\s?)?(?:\d{2}\s?)?9?\d{8,9}\b'
-    ]
-    
-    # Email pattern
-    EMAIL_PATTERN = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    
-    # Name patterns (including compound names with accents)
-    NAME_PATTERNS = [
-        r'\b(?:meu nome é|me chamo|sou o|sou a|eu sou)\s+([A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÃÕÇ][a-záéíóúàèìòùâêîôûãõç]+(?:\s+[A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÃÕÇ][a-záéíóúàèìòùâêîôûãõç]+)*)\b',
-        r'^([A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÃÕÇ][a-záéíóúàèìòùâêîôûãõç]+(?:\s+[A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÃÕÇ][a-záéíóúàèìòùâêîôûãõç]+)+)$'
-    ]
-    
-    # Legal area keywords
-    LEGAL_AREAS = {
-        'penal': ['penal', 'criminal', 'crime', 'preso', 'prisão', 'delegacia', 'inquérito', 'processo criminal', 'advogado criminal'],
-        'saude': ['saúde', 'saude', 'plano', 'médico', 'hospital', 'cirurgia', 'tratamento', 'liminar', 'ans', 'convênio']
-    }
-    
-    # Urgency indicators
-    URGENCY_KEYWORDS = [
-        'urgente', 'emergência', 'emergencia', 'rápido', 'rapido', 'hoje', 'agora',
-        'preso', 'audiência', 'audiencia', 'prazo', 'vence', 'amanhã', 'amanha'
-    ]
-
-# =================== SESSION MANAGER ===================
-
-class SessionManager:
-    """Manages session locks and atomic operations"""
-    
+class IntelligentHybridOrchestrator:
     def __init__(self):
-        self._locks: Dict[str, asyncio.Lock] = {}
-        self._rate_limits: Dict[str, List[datetime]] = {}
-    
-    @asynccontextmanager
-    async def session_lock(self, session_id: str):
-        """Async context manager for session locks"""
-        if session_id not in self._locks:
-            self._locks[session_id] = asyncio.Lock()
-        
-        lock = self._locks[session_id]
+        self.gemini_available = True
+        self.gemini_timeout = 15.0
+        self.law_firm_number = "+5511918368812"
+
+    def _format_brazilian_phone(self, phone_clean: str) -> str:
+        """Format Brazilian phone number correctly for WhatsApp."""
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=Config.LOCK_TIMEOUT_SECONDS)
-            yield
-        except asyncio.TimeoutError:
-            logger.error(f"Lock timeout for session {session_id}")
-            raise Exception("Session temporarily unavailable")
-        finally:
-            if lock.locked():
-                lock.release()
-    
-    def check_rate_limit(self, session_id: str) -> bool:
-        """Check if session is within rate limits"""
-        now = datetime.now(timezone.utc)
-        minute_ago = now - timedelta(minutes=1)
-        
-        if session_id not in self._rate_limits:
-            self._rate_limits[session_id] = []
-        
-        # Clean old entries
-        self._rate_limits[session_id] = [
-            timestamp for timestamp in self._rate_limits[session_id]
-            if timestamp > minute_ago
-        ]
-        
-        # Check limit
-        if len(self._rate_limits[session_id]) >= Config.RATE_LIMIT_MESSAGES_PER_MINUTE:
-            return False
-        
-        # Add current timestamp
-        self._rate_limits[session_id].append(now)
-        return True
-    
-    async def get_session_context(self, session_id: str) -> Optional[SessionContext]:
-        """Get session context with automatic cleanup of expired sessions"""
-        try:
-            session_data = await get_user_session(session_id)
-            if not session_data:
-                return None
-            
-            # Check if session is expired
-            created_at = datetime.fromisoformat(session_data.get('created_at', ''))
-            if datetime.now(timezone.utc) - created_at > timedelta(hours=Config.SESSION_TTL_HOURS):
-                logger.info(f"Session {session_id} expired, cleaning up")
-                await self._cleanup_expired_session(session_id)
-                return None
-            
-            # Convert to SessionContext
-            extracted_data = ExtractedData(**session_data.get('extracted_data', {}))
-            return SessionContext(
-                session_id=session_id,
-                platform=session_data.get('platform', 'web'),
-                state=FlowState(session_data.get('state', 'initial')),
-                extracted_data=extracted_data,
-                message_count=session_data.get('message_count', 0),
-                created_at=created_at,
-                last_updated=datetime.fromisoformat(session_data.get('last_updated', '')),
-                error_count=session_data.get('error_count', 0),
-                rate_limit_count=session_data.get('rate_limit_count', 0),
-                correlation_id=session_data.get('correlation_id', str(uuid.uuid4())[:8])
-            )
+            if not phone_clean:
+                return ""
+            phone_clean = ''.join(filter(str.isdigit, str(phone_clean)))
+
+            if phone_clean.startswith("55"):
+                phone_clean = phone_clean[2:]
+
+            if len(phone_clean) == 8:
+                return f"55{phone_clean}"
+            if len(phone_clean) == 9:
+                return f"55{phone_clean}"
+            if len(phone_clean) == 10:
+                ddd = phone_clean[:2]
+                number = phone_clean[2:]
+                if len(number) == 8 and number[0] in ['6', '7', '8', '9']:
+                    number = f"9{number}"
+                return f"55{ddd}{number}"
+            if len(phone_clean) == 11:
+                ddd = phone_clean[:2]
+                number = phone_clean[2:]
+                return f"55{ddd}{number}"
+            return f"55{phone_clean}"
         except Exception as e:
-            logger.error(f"Error getting session context {session_id}: {str(e)}")
-            return None
-    
-    async def save_session_context(self, context: SessionContext) -> bool:
-        """Save session context atomically"""
-        try:
-            context.last_updated = datetime.now(timezone.utc)
-            session_data = {
-                'session_id': context.session_id,
-                'platform': context.platform,
-                'state': context.state.value,
-                'extracted_data': asdict(context.extracted_data),
-                'message_count': context.message_count,
-                'created_at': context.created_at.isoformat(),
-                'last_updated': context.last_updated.isoformat(),
-                'error_count': context.error_count,
-                'rate_limit_count': context.rate_limit_count,
-                'correlation_id': context.correlation_id
-            }
-            return await save_user_session(context.session_id, session_data)
-        except Exception as e:
-            logger.error(f"Error saving session context {context.session_id}: {str(e)}")
-            return False
-    
-    async def _cleanup_expired_session(self, session_id: str):
-        """Clean up expired session"""
-        try:
-            await save_user_session(session_id, None)
-            if session_id in self._locks:
-                del self._locks[session_id]
-            if session_id in self._rate_limits:
-                del self._rate_limits[session_id]
-        except Exception as e:
-            logger.error(f"Error cleaning up session {session_id}: {str(e)}")
+            logger.error(f"Error formatting phone number {phone_clean}: {str(e)}")
+            return f"55{phone_clean if phone_clean else ''}"
 
-# =================== DATA EXTRACTOR ===================
-
-class DataExtractor:
-    """Intelligent data extraction from free-form text"""
-    
-    @staticmethod
-    def extract_phone(text: str) -> Optional[str]:
-        """Extract Brazilian phone number from text"""
-        for pattern in DataPatterns.PHONE_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                phone = re.sub(r'[^\d]', '', match.group())
-                if 10 <= len(phone) <= 13:
-                    return phone
-        return None
-    
-    @staticmethod
-    def extract_email(text: str) -> Optional[str]:
-        """Extract email from text"""
-        match = re.search(DataPatterns.EMAIL_PATTERN, text, re.IGNORECASE)
-        return match.group() if match else None
-    
-    @staticmethod
-    def extract_name(text: str) -> Optional[str]:
-        """Extract name from text using various patterns"""
-        for pattern in DataPatterns.NAME_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                name = match.group(1) if match.groups() else match.group()
-                # Validate name (at least 2 words, reasonable length)
-                words = name.strip().split()
-                if len(words) >= 2 and 4 <= len(name) <= 50:
-                    return name.title()
-        return None
-    
-    @staticmethod
-    def detect_legal_area(text: str) -> Optional[str]:
-        """Detect legal area from keywords"""
-        text_lower = text.lower()
-        
-        penal_score = sum(1 for keyword in DataPatterns.LEGAL_AREAS['penal'] if keyword in text_lower)
-        saude_score = sum(1 for keyword in DataPatterns.LEGAL_AREAS['saude'] if keyword in text_lower)
-        
-        if penal_score > saude_score and penal_score > 0:
-            return "Direito Penal"
-        elif saude_score > 0:
-            return "Direito da Saúde"
-        return None
-    
-    @staticmethod
-    def detect_urgency(text: str) -> str:
-        """Detect urgency level from text"""
-        text_lower = text.lower()
-        urgency_count = sum(1 for keyword in DataPatterns.URGENCY_KEYWORDS if keyword in text_lower)
-        return "high" if urgency_count > 0 else "normal"
-    
-    @staticmethod
-    def extract_all_data(text: str) -> ExtractedData:
-        """Extract all possible data from text"""
-        if not text or len(text.strip()) < 2:
-            return ExtractedData()
-        
-        # Truncate if too long
-        if len(text) > Config.MAX_MESSAGE_LENGTH:
-            text = text[:Config.MAX_MESSAGE_LENGTH] + "..."
-        
-        extracted = ExtractedData(
-            name=DataExtractor.extract_name(text),
-            phone=DataExtractor.extract_phone(text),
-            email=DataExtractor.extract_email(text),
-            legal_area=DataExtractor.detect_legal_area(text),
-            urgency_level=DataExtractor.detect_urgency(text),
-            case_description=text.strip() if len(text.strip()) > 20 else None
-        )
-        
-        # Calculate confidence score
-        score = 0.0
-        if extracted.name: score += 0.3
-        if extracted.phone: score += 0.3
-        if extracted.email: score += 0.2
-        if extracted.legal_area: score += 0.2
-        
-        extracted.confidence_score = min(score, 1.0)
-        return extracted
-
-# =================== MESSAGE PROCESSOR ===================
-
-class MessageProcessor:
-    """Context-aware message processing"""
-    
-    def __init__(self, session_manager: SessionManager):
-        self.session_manager = session_manager
-    
-    def _get_personalized_greeting(self, extracted_data: ExtractedData) -> str:
-        """Generate personalized greeting based on extracted data"""
+    def _get_personalized_greeting(self, phone_number: Optional[str] = None, session_id: str = "", user_name: str = "") -> str:
+        """Mensagem inicial estratégica otimizada"""
         now = datetime.now()
         hour = now.hour
         
@@ -341,510 +74,923 @@ class MessageProcessor:
         else:
             greeting = "Boa noite"
         
-        name_part = f", {extracted_data.name.split()[0]}" if extracted_data.name else ""
-        urgency_part = " Entendo que sua situação é urgente." if extracted_data.urgency_level == "high" else ""
-        
-        return f"""{greeting}{name_part}! 👋
+        strategic_greeting = f"""{greeting}! 👋
 
-Bem-vindo ao m.lima Advogados Associados.{urgency_part}
+Bem-vindo ao m.lima Advogados Associados.
 
-Somos especialistas em Direito Penal e da Saúde, com mais de 1000 casos resolvidos e uma equipe experiente pronta para te ajudar.
+Você está no lugar certo! Somos especialistas em Direito Penal e da Saúde, com mais de 1000 casos resolvidos e uma equipe experiente pronta para te ajudar.
 
-Para que eu possa direcionar você ao advogado especialista ideal, preciso de algumas informações básicas."""
-    
-    def _generate_data_collection_message(self, context: SessionContext) -> str:
-        """Generate intelligent data collection message"""
-        data = context.extracted_data
-        missing_items = []
-        
-        if not data.name:
-            missing_items.append("seu nome completo")
-        if not data.phone:
-            missing_items.append("seu WhatsApp com DDD")
-        if not data.email:
-            missing_items.append("seu e-mail")
-        if not data.legal_area:
-            missing_items.append("a área jurídica (Direito Penal ou Direito da Saúde)")
-        
-        if not missing_items:
-            return self._generate_completion_message(context)
-        
-        if len(missing_items) == 1:
-            return f"Para finalizar, preciso apenas de {missing_items[0]}:"
-        elif len(missing_items) == 2:
-            return f"Preciso ainda de {missing_items[0]} e {missing_items[1]}:"
-        else:
-            items_text = ", ".join(missing_items[:-1]) + f" e {missing_items[-1]}"
-            return f"Para prosseguir, preciso de: {items_text}."
-    
-    def _generate_completion_message(self, context: SessionContext) -> str:
-        """Generate completion message when all data is collected"""
-        data = context.extracted_data
-        name = data.name.split()[0] if data.name else "Cliente"
-        
-        return f"""Perfeito, {name}! ✅
+💼 Sabemos que questões jurídicas podem ser urgentes e complexas, por isso oferecemos:
+• Atendimento ágil e personalizado
+• Estratégias focadas em resultados
+• Acompanhamento completo do seu caso
 
-Tenho todas as informações necessárias:
-• Nome: {data.name}
-• Contato: {data.phone} / {data.email}
-• Área: {data.legal_area}
+Para que eu possa direcionar você ao advogado especialista ideal e acelerar a solução do seu caso, preciso conhecer um pouco mais sobre sua situação.
 
-Nossa equipe especializada foi notificada e entrará em contato em breve. Você fez a escolha certa ao confiar no m.lima! 🤝"""
-    
-    async def process_message(self, message: str, context: SessionContext) -> Tuple[str, SessionContext]:
-        """Process message with context awareness"""
+Qual é o seu nome completo? 😊"""
+        
+        return strategic_greeting
+
+    def _get_strategic_whatsapp_message(self, user_name: str, area: str, phone_formatted: str) -> str:
+        """Mensagem estratégica otimizada para conversão"""
+        first_name = user_name.split()[0] if user_name else "Cliente"
+        
+        area_messages = {
+            "penal": {
+                "expertise": "Nossa equipe especializada em Direito Penal já resolveu centenas de casos similares",
+                "urgency": "Sabemos que situações criminais precisam de atenção IMEDIATA",
+                "benefit": "proteger seus direitos e buscar o melhor resultado possível"
+            },
+            "saude": {
+                "expertise": "Nossos advogados especialistas em Direito da Saúde têm expertise em ações contra planos",
+                "urgency": "Questões de saúde não podem esperar",
+                "benefit": "garantir seu tratamento e obter as coberturas devidas"
+            },
+            "default": {
+                "expertise": "Nossa equipe jurídica experiente",
+                "urgency": "Sua situação precisa de atenção especializada",
+                "benefit": "alcançar a solução mais eficaz para seu caso"
+            }
+        }
+        
+        area_key = "default"
+        if any(word in area.lower() for word in ["penal", "criminal", "crime"]):
+            area_key = "penal"
+        elif any(word in area.lower() for word in ["saude", "saúde", "plano", "medic"]):
+            area_key = "saude"
+            
+        msgs = area_messages[area_key]
+        
+        strategic_message = f"""🚀 {first_name}, uma EXCELENTE notícia!
+
+✅ Seu atendimento foi PRIORIZADO no sistema m.lima
+
+{msgs['expertise']} com resultados comprovados e já foi IMEDIATAMENTE notificada sobre seu caso.
+
+🎯 {msgs['urgency']} - por isso um advogado experiente entrará em contato com você nos PRÓXIMOS MINUTOS.
+
+🏆 DIFERENCIAL m.lima:
+• ⚡ Atendimento ágil e personalizado
+• 🎯 Estratégia focada em RESULTADOS
+• 📋 Acompanhamento completo do processo
+• 💪 Equipe com vasta experiência
+
+Você fez a escolha certa ao confiar no m.lima para {msgs['benefit']}.
+
+⏰ Aguarde nossa ligação - sua situação está em excelentes mãos!
+
+---
+✉️ m.lima Advogados Associados
+📱 Contato prioritário ativado"""
+
+        return strategic_message
+
+    async def should_notify_lawyers(self, session_data: Dict[str, Any], platform: str) -> Dict[str, Any]:
+        """Lógica inteligente de notificação"""
         try:
-            # Extract new data from message
-            new_data = DataExtractor.extract_all_data(message)
+            if session_data.get("lawyers_notified", False):
+                return {
+                    "should_notify": False,
+                    "reason": "already_notified",
+                    "message": "Advogados já foram notificados anteriormente"
+                }
             
-            # Merge with existing data (new data takes precedence)
-            merged_data = ExtractedData(
-                name=new_data.name or context.extracted_data.name,
-                phone=new_data.phone or context.extracted_data.phone,
-                email=new_data.email or context.extracted_data.email,
-                legal_area=new_data.legal_area or context.extracted_data.legal_area,
-                urgency_level=new_data.urgency_level if new_data.urgency_level == "high" else context.extracted_data.urgency_level,
-                case_description=new_data.case_description or context.extracted_data.case_description
-            )
+            lead_data = session_data.get("lead_data", {})
+            message_count = session_data.get("message_count", 0)
+            current_step = session_data.get("current_step", "")
+            flow_completed = session_data.get("flow_completed", False)
             
-            # Update confidence score
-            score = 0.0
-            if merged_data.name: score += 0.3
-            if merged_data.phone: score += 0.3
-            if merged_data.email: score += 0.2
-            if merged_data.legal_area: score += 0.2
-            merged_data.confidence_score = min(score, 1.0)
-            
-            # Update context
-            context.extracted_data = merged_data
-            context.message_count += 1
-            
-            # Determine next state and response
-            if context.state == FlowState.INITIAL:
-                context.state = FlowState.COLLECTING_DATA
-                response = self._get_personalized_greeting(merged_data)
-                if merged_data.confidence_score < 1.0:
-                    response += "\n\n" + self._generate_data_collection_message(context)
-            elif context.state == FlowState.COLLECTING_DATA:
-                if merged_data.confidence_score >= 1.0:
-                    context.state = FlowState.COMPLETED
-                    response = self._generate_completion_message(context)
-                else:
-                    response = self._generate_data_collection_message(context)
-            elif context.state == FlowState.COMPLETED:
-                name = merged_data.name.split()[0] if merged_data.name else "Cliente"
-                response = f"Obrigado, {name}! Nossa equipe já foi notificada e entrará em contato em breve. 😊"
-            else:
-                # Error recovery
-                context.state = FlowState.COLLECTING_DATA
-                response = "Vamos continuar com seu atendimento. " + self._generate_data_collection_message(context)
-            
-            return response, context
-            
-        except Exception as e:
-            logger.error(f"Error processing message: {str(e)}")
-            context.error_count += 1
-            context.state = FlowState.ERROR_RECOVERY
-            return "Desculpe, houve um problema técnico. Vamos continuar seu atendimento.", context
-
-# =================== ERROR RECOVERY ===================
-
-class ErrorRecovery:
-    """Intelligent error recovery that preserves user state"""
-    
-    @staticmethod
-    def recover_from_error(context: SessionContext, error: Exception) -> Tuple[str, SessionContext]:
-        """Recover from error while preserving user progress"""
-        context.error_count += 1
-        
-        # Different recovery strategies based on error count
-        if context.error_count == 1:
-            # First error - gentle recovery
-            context.state = FlowState.COLLECTING_DATA
-            return "Houve um pequeno problema técnico, mas vamos continuar. Como posso ajudá-lo?", context
-        elif context.error_count <= 3:
-            # Multiple errors - more explicit recovery
-            name = context.extracted_data.name.split()[0] if context.extracted_data.name else ""
-            return f"Peço desculpas pelos problemas técnicos, {name}. Vamos prosseguir com seu atendimento.", context
-        else:
-            # Too many errors - fallback to basic service
-            return "Estamos enfrentando dificuldades técnicas. Por favor, entre em contato pelo telefone (11) 91836-8812.", context
-
-# =================== NOTIFICATION MANAGER ===================
-
-class NotificationManager:
-    """Handles notifications with retry logic and circuit breaker"""
-    
-    def __init__(self):
-        self.failure_count = 0
-        self.last_failure_time = None
-        self.circuit_open = False
-    
-    async def notify_lawyers_with_retry(self, context: SessionContext) -> bool:
-        """Notify lawyers with exponential backoff retry"""
-        if self.circuit_open:
-            if datetime.now(timezone.utc) - self.last_failure_time < timedelta(minutes=5):
-                logger.warning("Circuit breaker open, skipping notification")
-                return False
-            else:
-                self.circuit_open = False
-                self.failure_count = 0
-        
-        for attempt in range(Config.NOTIFICATION_RETRY_ATTEMPTS):
-            try:
-                data = context.extracted_data
-                result = await asyncio.wait_for(
-                    lawyer_notification_service.notify_lawyers_of_new_lead(
-                        lead_name=data.name,
-                        lead_phone=data.phone,
-                        category=data.legal_area,
-                        additional_info={
-                            "email": data.email,
-                            "case_description": data.case_description,
-                            "urgency_level": data.urgency_level,
-                            "platform": context.platform,
-                            "session_id": context.session_id,
-                            "correlation_id": context.correlation_id
-                        }
-                    ),
-                    timeout=Config.OPERATION_TIMEOUT_SECONDS
+            if platform == "web":
+                required_fields = ["identification", "contact_info", "area_qualification", "case_details"]
+                has_required_fields = all(lead_data.get(field) for field in required_fields)
+                
+                criteria_met = (
+                    flow_completed and 
+                    has_required_fields and
+                    len(lead_data.get("identification", "").strip()) >= 3 and
+                    len(lead_data.get("case_details", "").strip()) >= 15
                 )
                 
-                if result.get("success"):
-                    self.failure_count = 0
-                    logger.info(f"Lawyers notified successfully for session {context.session_id}")
-                    return True
-                else:
-                    raise Exception(f"Notification failed: {result.get('error', 'Unknown error')}")
-                    
-            except Exception as e:
-                self.failure_count += 1
-                self.last_failure_time = datetime.now(timezone.utc)
+                qualification_score = self._calculate_qualification_score(lead_data, platform)
                 
-                if attempt < Config.NOTIFICATION_RETRY_ATTEMPTS - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff
-                    logger.warning(f"Notification attempt {attempt + 1} failed, retrying in {wait_time}s: {str(e)}")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"All notification attempts failed for session {context.session_id}: {str(e)}")
-                    
-                    # Open circuit breaker after too many failures
-                    if self.failure_count >= 5:
-                        self.circuit_open = True
-                        logger.error("Circuit breaker opened due to repeated notification failures")
-        
-        return False
-
-# =================== MAIN ORCHESTRATOR ===================
-
-class IntelligentHybridOrchestrator:
-    """Production-ready orchestrator with all improvements"""
-    
-    def __init__(self):
-        self.session_manager = SessionManager()
-        self.message_processor = MessageProcessor(self.session_manager)
-        self.notification_manager = NotificationManager()
-        self.gemini_available = True
-        self.law_firm_number = Config.LAW_FIRM_NUMBER
-    
-    async def process_message(
-        self, 
-        message: str, 
-        session_id: str, 
-        phone_number: Optional[str] = None, 
-        platform: str = "web"
-    ) -> Dict[str, Any]:
-        """Main message processing with comprehensive error handling"""
-        correlation_id = str(uuid.uuid4())[:8]
-        
-        try:
-            # Rate limiting check
-            if not self.session_manager.check_rate_limit(session_id):
-                logger.warning(f"Rate limit exceeded for session {session_id}")
-                return {
-                    "response_type": "rate_limited",
-                    "session_id": session_id,
-                    "response": "Muitas mensagens em pouco tempo. Aguarde um momento antes de enviar novamente.",
-                    "correlation_id": correlation_id
-                }
-            
-            # Use session lock to prevent race conditions
-            async with self.session_manager.session_lock(session_id):
-                # Get or create session context
-                context = await self.session_manager.get_session_context(session_id)
-                if not context:
-                    context = SessionContext(
-                        session_id=session_id,
-                        platform=platform,
-                        state=FlowState.INITIAL,
-                        extracted_data=ExtractedData(),
-                        correlation_id=correlation_id
-                    )
-                
-                # Process message
-                response, updated_context = await self.message_processor.process_message(message, context)
-                
-                # Handle completion
-                if updated_context.state == FlowState.COMPLETED and updated_context.extracted_data.confidence_score >= 1.0:
-                    # Save lead data
-                    try:
-                        await self._save_lead_data(updated_context)
-                    except Exception as e:
-                        logger.error(f"Error saving lead data: {str(e)}")
-                    
-                    # Notify lawyers (async, don't block response)
-                    asyncio.create_task(self.notification_manager.notify_lawyers_with_retry(updated_context))
-                    
-                    # Send WhatsApp message if phone available
-                    if updated_context.extracted_data.phone and platform == "web":
-                        asyncio.create_task(self._send_whatsapp_confirmation(updated_context))
-                
-                # Save session context
-                await self.session_manager.save_session_context(updated_context)
-                
-                return {
-                    "response_type": f"{platform}_intelligent",
-                    "session_id": session_id,
-                    "response": response,
-                    "state": updated_context.state.value,
-                    "confidence_score": updated_context.extracted_data.confidence_score,
-                    "message_count": updated_context.message_count,
-                    "correlation_id": correlation_id,
-                    "flow_completed": updated_context.state == FlowState.COMPLETED
-                }
-        
-        except Exception as e:
-            logger.error(f"Critical error in process_message (correlation_id: {correlation_id}): {str(e)}")
-            
-            # Try to recover context and provide meaningful response
-            try:
-                context = await self.session_manager.get_session_context(session_id)
-                if context:
-                    recovery_response, recovered_context = ErrorRecovery.recover_from_error(context, e)
-                    await self.session_manager.save_session_context(recovered_context)
+                if criteria_met and qualification_score >= 0.8:
                     return {
-                        "response_type": "error_recovery",
-                        "session_id": session_id,
-                        "response": recovery_response,
-                        "correlation_id": correlation_id,
-                        "error": "recovered"
+                        "should_notify": True,
+                        "reason": "web_flow_completed",
+                        "qualification_score": qualification_score,
+                        "message": f"Lead web qualificado - Score: {qualification_score:.2f}"
                     }
-            except Exception as recovery_error:
-                logger.error(f"Error recovery failed (correlation_id: {correlation_id}): {str(recovery_error)}")
-            
-            # Final fallback
-            return {
-                "response_type": "system_error",
-                "session_id": session_id,
-                "response": "Estamos enfrentando dificuldades técnicas. Por favor, tente novamente em alguns minutos.",
-                "correlation_id": correlation_id,
-                "error": "system_failure"
-            }
-    
-    async def handle_whatsapp_authorization(self, auth_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle WhatsApp authorization with improved error handling"""
-        try:
-            session_id = auth_data.get("session_id", "")
-            phone_number = auth_data.get("phone_number", "")
-            user_data = auth_data.get("user_data", {})
-            
-            # Create session context
-            extracted_data = ExtractedData(
-                name=user_data.get("name"),
-                phone=phone_number,
-                email=user_data.get("email")
-            )
-            
-            context = SessionContext(
-                session_id=session_id,
-                platform="whatsapp",
-                state=FlowState.INITIAL,
-                extracted_data=extracted_data
-            )
-            
-            await self.session_manager.save_session_context(context)
-            
-            # Send initial WhatsApp message
-            initial_message = self._get_strategic_initial_message(
-                user_data.get("name", "Cliente"), 
-                session_id
-            )
-            
-            phone_formatted = self._format_brazilian_phone(phone_number)
-            whatsapp_number = f"{phone_formatted}@s.whatsapp.net"
-            
-            message_sent = await baileys_service.send_whatsapp_message(whatsapp_number, initial_message)
+                
+            elif platform == "whatsapp":
+                required_fields = ["identification", "contact_info", "area_qualification"]
+                has_required_fields = all(lead_data.get(field) for field in required_fields)
+                
+                engagement_criteria = (
+                    message_count >= 4 and
+                    has_required_fields and
+                    len(lead_data.get("identification", "").strip()) >= 3 and
+                    len(lead_data.get("area_qualification", "").strip()) >= 3
+                )
+                
+                advanced_step = current_step in ["step4_details", "step5_confirmation", "completed"]
+                qualification_score = self._calculate_qualification_score(lead_data, platform)
+                
+                if engagement_criteria and advanced_step and qualification_score >= 0.7:
+                    return {
+                        "should_notify": True,
+                        "reason": "whatsapp_qualified",
+                        "qualification_score": qualification_score,
+                        "engagement_level": message_count,
+                        "current_step": current_step,
+                        "message": f"Lead WhatsApp qualificado - Score: {qualification_score:.2f}, Step: {current_step}"
+                    }
             
             return {
-                "status": "authorization_processed",
-                "session_id": session_id,
-                "message_sent": message_sent
+                "should_notify": False,
+                "reason": "not_qualified_yet",
+                "qualification_score": self._calculate_qualification_score(lead_data, platform),
+                "missing_criteria": self._get_missing_criteria(session_data, platform),
+                "message": "Lead ainda não atingiu critérios de qualificação"
             }
             
         except Exception as e:
-            logger.error(f"Error in WhatsApp authorization: {str(e)}")
+            logger.error(f"Erro ao avaliar notificação: {str(e)}")
             return {
-                "status": "authorization_error",
-                "error": str(e)
+                "should_notify": False,
+                "reason": "evaluation_error",
+                "error": str(e),
+                "message": "Erro na avaliação - não notificando por segurança"
             }
-    
-    async def get_session_context(self, session_id: str) -> Dict[str, Any]:
-        """Get session context for external queries"""
+
+    def _calculate_qualification_score(self, lead_data: Dict[str, Any], platform: str) -> float:
+        """Calcula score de qualificação do lead (0.0 a 1.0)"""
         try:
-            context = await self.session_manager.get_session_context(session_id)
-            if not context:
-                return {"exists": False}
+            score = 0.0
             
-            return {
-                "exists": True,
-                "session_id": session_id,
-                "platform": context.platform,
-                "state": context.state.value,
-                "extracted_data": asdict(context.extracted_data),
-                "message_count": context.message_count,
-                "flow_completed": context.state == FlowState.COMPLETED,
-                "correlation_id": context.correlation_id
-            }
+            name = lead_data.get("identification", "").strip()
+            if len(name) >= 3:
+                score += 0.1
+            if len(name.split()) >= 2:
+                score += 0.1
+                
+            contact = lead_data.get("contact_info", "").strip()
+            if contact:
+                score += 0.1
+                if re.search(r'\d{10,11}', contact):
+                    score += 0.1
+                if re.search(r'\S+@\S+\.\S+', contact):
+                    score += 0.1
+            
+            area = lead_data.get("area_qualification", "").strip()
+            if area:
+                score += 0.1
+                if any(keyword in area.lower() for keyword in ["penal", "saude", "saúde", "criminal", "plano"]):
+                    score += 0.1
+            
+            details = lead_data.get("case_details", "").strip()
+            if details:
+                score += 0.1
+                if len(details) >= 20:
+                    score += 0.1
+                if len(details) >= 50:
+                    score += 0.1
+            
+            return min(score, 1.0)
+            
         except Exception as e:
-            logger.error(f"Error getting session context: {str(e)}")
-            return {"exists": False, "error": str(e)}
-    
+            logger.error(f"Erro ao calcular score: {str(e)}")
+            return 0.0
+
+    def _get_missing_criteria(self, session_data: Dict[str, Any], platform: str) -> list:
+        """Identifica critérios faltantes para qualificação"""
+        missing = []
+        lead_data = session_data.get("lead_data", {})
+        
+        if not lead_data.get("identification"):
+            missing.append("nome_completo")
+        if not lead_data.get("contact_info"):
+            missing.append("informacoes_contato")
+        if not lead_data.get("area_qualification"):
+            missing.append("area_juridica")
+            
+        if platform == "web":
+            if not lead_data.get("case_details"):
+                missing.append("detalhes_caso")
+            if not session_data.get("flow_completed"):
+                missing.append("fluxo_incompleto")
+        elif platform == "whatsapp":
+            if session_data.get("message_count", 0) < 4:
+                missing.append("engajamento_insuficiente")
+                
+        return missing
+
+    async def notify_lawyers_if_qualified(self, session_id: str, session_data: Dict[str, Any], platform: str) -> Dict[str, Any]:
+        """Método principal de notificação inteligente"""
+        try:
+            notification_check = await self.should_notify_lawyers(session_data, platform)
+            
+            if not notification_check["should_notify"]:
+                logger.info(f"📊 Não notificando advogados - Session: {session_id} | Razão: {notification_check['reason']}")
+                return {
+                    "notified": False,
+                    "reason": notification_check["reason"],
+                    "details": notification_check
+                }
+            
+            lead_data = session_data.get("lead_data", {})
+            user_name = lead_data.get("identification", "Lead Qualificado")
+            area = lead_data.get("area_qualification", "não especificada")
+            case_details = lead_data.get("case_details", "aguardando mais detalhes")
+            contact_info = lead_data.get("contact_info", "")
+            
+            phone_clean = lead_data.get("phone", "")
+            if not phone_clean:
+                phone_match = re.search(r'(\d{10,11})', contact_info or "")
+                phone_clean = phone_match.group(1) if phone_match else ""
+            
+            logger.info(f"🚀 NOTIFICANDO ADVOGADOS - Session: {session_id} | Lead: {user_name} | Área: {area} | Platform: {platform}")
+            
+            try:
+                notification_result = await lawyer_notification_service.notify_lawyers_of_new_lead(
+                    lead_name=user_name,
+                    lead_phone=phone_clean,
+                    category=area,
+                    additional_info={
+                        "case_details": case_details,
+                        "contact_info": contact_info,
+                        "email": lead_data.get("email", ""),
+                        "urgency": "high" if platform == "whatsapp" else "normal",
+                        "platform": platform,
+                        "qualification_score": notification_check.get("qualification_score", 0),
+                        "session_id": session_id,
+                        "engagement_level": session_data.get("message_count", 0),
+                        "current_step": session_data.get("current_step", ""),
+                        "lead_source": f"{platform}_qualified_lead"
+                    }
+                )
+                
+                if notification_result.get("success"):
+                    session_data["lawyers_notified"] = True
+                    session_data["lawyers_notified_at"] = ensure_utc(datetime.now(timezone.utc))
+                    await save_user_session(session_id, session_data)
+                    
+                    logger.info(f"✅ Advogados notificados com sucesso - Session: {session_id}")
+                    
+                    return {
+                        "notified": True,
+                        "success": True,
+                        "platform": platform,
+                        "qualification_score": notification_check.get("qualification_score"),
+                        "notification_result": notification_result
+                    }
+                else:
+                    logger.error(f"❌ Falha na notificação dos advogados - Session: {session_id}")
+                    return {
+                        "notified": True,
+                        "success": False,
+                        "error": "notification_failed",
+                        "details": notification_result
+                    }
+                    
+            except Exception as notification_error:
+                logger.error(f"❌ Erro ao notificar advogados - Session: {session_id}: {str(notification_error)}")
+                return {
+                    "notified": True,
+                    "success": False,
+                    "error": "notification_exception",
+                    "exception": str(notification_error)
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Erro na lógica de notificação - Session: {session_id}: {str(e)}")
+            return {
+                "notified": False,
+                "error": "notification_logic_error",
+                "exception": str(e)
+            }
+
+    async def get_gemini_health_status(self) -> Dict[str, Any]:
+        try:
+            test_response = await asyncio.wait_for(
+                ai_orchestrator.generate_response("test", session_id="__health_check__"),
+                timeout=5.0
+            )
+            ai_orchestrator.clear_session_memory("__health_check__")
+            if test_response and isinstance(test_response, str) and test_response.strip():
+                self.gemini_available = True
+                return {"service": "gemini_ai", "status": "active", "available": True}
+            else:
+                self.gemini_available = False
+                return {"service": "gemini_ai", "status": "inactive", "available": False}
+        except Exception as e:
+            self.gemini_available = False
+            return {"service": "gemini_ai", "status": "error", "available": False, "error": str(e)}
+
     async def get_overall_service_status(self) -> Dict[str, Any]:
-        """Get comprehensive service status"""
         try:
             firebase_status = await get_firebase_service_status()
+            ai_status = await self.get_gemini_health_status()
+            firebase_healthy = firebase_status.get("status") == "active"
+            ai_healthy = ai_status.get("status") == "active"
             
+            if firebase_healthy and ai_healthy:
+                overall_status = "active"
+            elif firebase_healthy:
+                overall_status = "degraded"
+            else:
+                overall_status = "error"
+                
             return {
-                "overall_status": "active" if firebase_status.get("status") == "active" else "degraded",
+                "overall_status": overall_status,
                 "firebase_status": firebase_status,
+                "ai_status": ai_status,
                 "features": {
-                    "intelligent_data_extraction": True,
-                    "flexible_conversation_flow": True,
-                    "error_recovery": True,
-                    "rate_limiting": True,
-                    "session_management": True,
-                    "notification_retry": True
+                    "conversation_flow": firebase_healthy,
+                    "ai_responses": ai_healthy,
+                    "fallback_mode": firebase_healthy and not ai_healthy,
+                    "whatsapp_integration": True,
+                    "lead_collection": firebase_healthy,
+                    "intelligent_notifications": True
                 },
-                "configuration": {
-                    "session_ttl_hours": Config.SESSION_TTL_HOURS,
-                    "rate_limit_per_minute": Config.RATE_LIMIT_MESSAGES_PER_MINUTE,
-                    "operation_timeout": Config.OPERATION_TIMEOUT_SECONDS
-                }
+                "gemini_available": self.gemini_available,
+                "fallback_mode": not self.gemini_available
             }
         except Exception as e:
-            logger.error(f"Error getting service status: {str(e)}")
+            logger.error(f"Error getting overall service status: {str(e)}")
             return {
                 "overall_status": "error",
                 "error": str(e)
             }
-    
-    # =================== HELPER METHODS ===================
-    
-    def _format_brazilian_phone(self, phone: str) -> str:
-        """Format Brazilian phone number for WhatsApp"""
-        if not phone:
-            return ""
+
+    async def _get_or_create_session(self, session_id: str, platform: str, phone_number: Optional[str] = None) -> Dict[str, Any]:
+        """Criar ou obter sessão - inicia direto no fluxo"""
+        logger.info(f"Getting/creating session {session_id} for platform {platform}")
         
-        phone_clean = ''.join(filter(str.isdigit, str(phone)))
+        session_data = await get_user_session(session_id)
         
-        if phone_clean.startswith("55"):
-            return phone_clean
-        elif len(phone_clean) == 11:
-            return f"55{phone_clean}"
-        elif len(phone_clean) == 10:
-            ddd = phone_clean[:2]
-            number = phone_clean[2:]
-            if number[0] in ['6', '7', '8', '9']:
-                number = f"9{number}"
-            return f"55{ddd}{number}"
-        else:
-            return f"55{phone_clean}"
-    
-    def _get_strategic_initial_message(self, user_name: str, session_id: str) -> str:
-        """Generate strategic initial WhatsApp message"""
-        first_name = user_name.split()[0] if user_name else "Cliente"
+        if not session_data:
+            session_data = {
+                "session_id": session_id,
+                "platform": platform,
+                "created_at": ensure_utc(datetime.now(timezone.utc)),
+                "current_step": "step1_name",
+                "lead_data": {},
+                "message_count": 0,
+                "flow_completed": False,
+                "phone_submitted": False,
+                "lawyers_notified": False,
+                "last_updated": ensure_utc(datetime.now(timezone.utc)),
+                "first_interaction": True
+            }
+            logger.info(f"Created new session {session_id}")
+            await save_user_session(session_id, session_data)
+            
+        if phone_number:
+            session_data["phone_number"] = phone_number
+            
+        return session_data
+
+    def _is_phone_number(self, message: str) -> bool:
+        clean_message = ''.join(filter(str.isdigit, (message or "")))
+        return 10 <= len(clean_message) <= 13
+
+    def _get_flow_steps(self) -> Dict[str, Dict]:
+        """Fluxo humanizado e conversacional"""
+        return {
+            "step1_name": {
+                "question": "Para que eu possa te ajudar da melhor forma, me diga qual é o seu nome completo? 😊",
+                "field": "identification",
+                "next_step": "step2_contact"
+            },
+            "step2_contact": {
+                "question": "Prazer em conhecê-lo, {user_name}! 🤝\n\nAgora preciso de suas informações de contato para darmos continuidade:\n\n📱 Qual seu melhor WhatsApp?\n📧 E seu e-mail principal?\n\nPode me passar essas duas informações?",
+                "field": "contact_info",
+                "next_step": "step3_area"
+            },
+            "step3_area": {
+                "question": "Perfeito, {user_name}! 👍\n\nEm qual área do direito você precisa de nossa ajuda?\n\n⚖️ Direito Penal (crimes, investigações, defesas)\n🏥 Direito da Saúde (planos de saúde, ações médicas, liminares)\n\nQual dessas áreas tem a ver com sua situação?",
+                "field": "area_qualification",
+                "next_step": "step4_details"
+            },
+            "step4_details": {
+                "question": "Entendi, {user_name}. 💼\n\nPara nossos advogados já terem uma visão completa, me conte:\n\n• Sua situação já está na justiça ou é algo que acabou de acontecer?\n• Tem algum prazo urgente ou audiência marcada?\n• Em que cidade isso está ocorrendo?\n\nFique à vontade para me contar os detalhes! 🤝",
+                "field": "case_details",
+                "next_step": "step5_confirmation"
+            },
+            "step5_confirmation": {
+                "question": "Obrigado por todos esses detalhes, {user_name}! 🙏\n\nSituações como a sua realmente precisam de atenção especializada e rápida.\n\nTenho uma excelente notícia: nossa equipe já resolveu dezenas de casos similares com ótimos resultados! ✅\n\nVou registrar tudo para que o advogado responsável já entenda completamente seu caso e possa te ajudar com agilidade.\n\nEm alguns minutos você estará falando diretamente com um especialista. Podemos prosseguir? 🚀",
+                "field": "confirmation",
+                "next_step": "completed"
+            }
+        }
+
+    def _validate_answer(self, answer: str, step: str) -> bool:
+        """🔧 VALIDAÇÃO RIGOROSA CORRIGIDA"""
+        if not answer or len(answer.strip()) < 2:
+            return False
+            
+        answer_clean = answer.strip()
         
-        return f"""Olá {first_name}! 👋
+        if step == "step1_name":
+            # ✅ VALIDAÇÃO RIGOROSA PARA NOME
+            # Deve ter pelo menos 2 palavras
+            words = answer_clean.split()
+            if len(words) < 2:
+                return False
+            
+            # Cada palavra deve ter pelo menos 2 caracteres
+            for word in words:
+                if len(word) < 2:
+                    return False
+                # Não pode ter números
+                if any(char.isdigit() for char in word):
+                    return False
+            
+            # Comprimento total entre 4 e 50 caracteres
+            if not (4 <= len(answer_clean) <= 50):
+                return False
+                
+            return True
+            
+        elif step == "step2_contact":
+            # Deve ter pelo menos telefone ou email
+            has_phone = bool(re.search(r'\d{10,11}', answer_clean))
+            has_email = bool(re.search(r'\S+@\S+\.\S+', answer_clean))
+            return has_phone or has_email
+            
+        elif step == "step3_area":
+            # ✅ VALIDAÇÃO RIGOROSA PARA ÁREA JURÍDICA
+            area_keywords = [
+                'penal', 'criminal', 'crime', 'preso', 'prisão', 'delegacia', 'inquérito',
+                'saude', 'saúde', 'plano', 'médico', 'hospital', 'cirurgia', 'tratamento', 
+                'liminar', 'ans', 'convênio', 'unimed', 'bradesco', 'amil'
+            ]
+            return any(keyword in answer_clean.lower() for keyword in area_keywords)
+            
+        elif step == "step4_details":
+            # Detalhes substanciais
+            return len(answer_clean) >= 15
+            
+        elif step == "step5_confirmation":
+            # Confirmação simples
+            confirmation_words = ['sim', 'ok', 'pode', 'vamos', 'claro', 'certo', 'confirmo']
+            return any(word in answer_clean.lower() for word in confirmation_words)
+            
+        return True
 
-Obrigado por entrar em contato com o escritório m.lima através do nosso site.
+    def _extract_contact_info(self, contact_text: str) -> tuple:
+        phone_match = re.search(r'(\d{10,11})', contact_text or "")
+        email_match = re.search(r'([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})', contact_text or "")
+        phone = phone_match.group(1) if phone_match else ""
+        email = email_match.group(1) if email_match else ""
+        return phone, email
 
-Nossa equipe especializada está pronta para te ajudar com seu caso jurídico.
-
-Para darmos continuidade ao seu atendimento personalizado, responda esta mensagem com detalhes sobre sua situação.
-
-🆔 Sessão: {session_id}
-
----
-✉️ m.lima Advogados Associados
-📱 Atendimento prioritário ativado"""
-    
-    async def _save_lead_data(self, context: SessionContext):
-        """Save lead data to Firebase"""
+    async def _process_conversation_flow(self, session_data: Dict[str, Any], message: str) -> str:
+        """Processar fluxo conversacional humanizado com notificação inteligente"""
         try:
-            data = context.extracted_data
-            answers = []
+            session_id = session_data["session_id"]
+            current_step = session_data.get("current_step", "step1_name")
+            lead_data = session_data.get("lead_data", {})
+            is_first_interaction = session_data.get("first_interaction", False)
+            platform = session_data.get("platform", "web")
             
-            if data.name:
-                answers.append({"id": 1, "field": "name", "answer": data.name})
-            if data.phone:
-                answers.append({"id": 2, "field": "phone", "answer": data.phone})
-            if data.email:
-                answers.append({"id": 3, "field": "email", "answer": data.email})
-            if data.legal_area:
-                answers.append({"id": 4, "field": "legal_area", "answer": data.legal_area})
-            if data.case_description:
-                answers.append({"id": 5, "field": "case_description", "answer": data.case_description})
+            logger.info(f"Processing conversation - Step: {current_step}, Message: '{message[:50]}...', Platform: {platform}")
             
-            lead_id = await save_lead_data({
-                "answers": answers,
-                "platform": context.platform,
-                "session_id": context.session_id,
-                "confidence_score": data.confidence_score,
-                "urgency_level": data.urgency_level,
-                "correlation_id": context.correlation_id
-            })
+            flow_steps = self._get_flow_steps()
+
+            # Se é primeira interação, mostra saudação + primeira pergunta
+            if is_first_interaction:
+                session_data["first_interaction"] = False
+                await save_user_session(session_id, session_data)
+                greeting = self._get_personalized_greeting()
+                return greeting
+
+            # Fluxo já completado
+            if current_step == "completed":
+                user_name = lead_data.get("identification", "").split()[0] if lead_data.get("identification") else ""
+                return f"Obrigado, {user_name}! Nossa equipe já foi notificada e entrará em contato em breve. 😊"
+
+            # Processar steps do fluxo
+            if current_step in flow_steps:
+                step_config = flow_steps[current_step]
+                
+                # ✅ VALIDAÇÃO RIGOROSA
+                if not self._validate_answer(message, current_step):
+                    user_name = lead_data.get("identification", "").split()[0] if lead_data.get("identification") else ""
+                    
+                    # ✅ MENSAGENS DE ERRO ESPECÍFICAS
+                    retry_messages = {
+                        "step1_name": "Por favor, me diga seu nome completo (nome e sobrenome, sem números). Exemplo: João Silva 😊",
+                        "step2_contact": f"Preciso de suas informações de contato, {user_name}. Me passe seu WhatsApp (com DDD) e/ou e-mail.",
+                        "step3_area": f"{user_name}, preciso saber se é Direito Penal (crimes, investigações) ou Direito da Saúde (planos de saúde, liminares médicas).",
+                        "step4_details": f"Me conte mais detalhes sobre sua situação, {user_name}. Quanto mais informações, melhor poderemos te ajudar!",
+                        "step5_confirmation": f"Posso prosseguir com o registro das suas informações, {user_name}? (Responda: sim, ok, pode prosseguir)"
+                    }
+                    return retry_messages.get(current_step, "Por favor, me dê mais detalhes para que eu possa te ajudar melhor.")
+                
+                # Salvar resposta
+                field_name = step_config["field"]
+                lead_data[field_name] = message.strip()
+                
+                # Extrair informações de contato se for step2
+                if current_step == "step2_contact":
+                    phone, email = self._extract_contact_info(message)
+                    if phone:
+                        lead_data["phone"] = phone
+                    if email:
+                        lead_data["email"] = email
+                
+                session_data["lead_data"] = lead_data
+                
+                # Verificar se deve notificar advogados (antes de avançar)
+                notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, platform)
+                if notification_result.get("notified") and notification_result.get("success"):
+                    logger.info(f"✅ Advogados notificados durante fluxo - Step: {current_step}, Session: {session_id}")
+                
+                # Avançar para próximo step
+                next_step = step_config["next_step"]
+                
+                if next_step == "completed":
+                    session_data["current_step"] = "completed"
+                    session_data["flow_completed"] = True
+                    await save_user_session(session_id, session_data)
+                    return await self._handle_lead_finalization(session_id, session_data)
+                else:
+                    session_data["current_step"] = next_step
+                    await save_user_session(session_id, session_data)
+                    
+                    next_step_config = flow_steps[next_step]
+                    return self._interpolate_message(next_step_config["question"], lead_data)
+
+            # Estado inválido - reiniciar
+            logger.warning(f"Invalid state: {current_step}, resetting")
+            session_data["current_step"] = "step1_name"
+            session_data["first_interaction"] = True
+            await save_user_session(session_id, session_data)
+            return self._get_personalized_greeting()
+
+        except Exception as e:
+            logger.error(f"Exception in conversation flow: {str(e)}")
+            return self._get_personalized_greeting()
+
+    def _interpolate_message(self, message: str, lead_data: Dict[str, Any]) -> str:
+        """Interpolar dados do usuário na mensagem"""
+        try:
+            if not message:
+                return "Como posso ajudá-lo?"
+                
+            user_name = lead_data.get("identification", "")
+            if user_name and "{user_name}" in message:
+                first_name = user_name.split()[0]
+                message = message.replace("{user_name}", first_name)
+                
+            area = lead_data.get("area_qualification", "")
+            if area and "{area}" in message:
+                message = message.replace("{area}", area)
+                
+            return message
+        except Exception as e:
+            logger.error(f"Error interpolating message: {str(e)}")
+            return message
+
+    async def _handle_lead_finalization(self, session_id: str, session_data: Dict[str, Any]) -> str:
+        """🎯 FINALIZAÇÃO PARA CHAT DA LANDING - SEM WHATSAPP"""
+        try:
+            logger.info(f"Lead finalization for session: {session_id}")
             
-            logger.info(f"Lead saved with ID: {lead_id} (correlation_id: {context.correlation_id})")
+            lead_data = session_data.get("lead_data", {})
+            platform = session_data.get("platform", "web")
+            user_name = lead_data.get("identification", "Cliente")
+            first_name = user_name.split()[0] if user_name else "Cliente"
+            
+            # ✅ CHAT DA LANDING - FINALIZAÇÃO SIMPLES
+            if platform == "web":
+                # Notificar advogados se ainda não foram notificados
+                notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, platform)
+                
+                # Salvar lead data
+                try:
+                    answers = []
+                    field_mapping = {
+                        "identification": {"id": 1, "answer": lead_data.get("identification", "")},
+                        "contact_info": {"id": 2, "answer": lead_data.get("contact_info", "")},
+                        "area_qualification": {"id": 3, "answer": lead_data.get("area_qualification", "")},
+                        "case_details": {"id": 4, "answer": lead_data.get("case_details", "")},
+                        "confirmation": {"id": 5, "answer": lead_data.get("confirmation", "")}
+                    }
+                    
+                    for field, data in field_mapping.items():
+                        if data["answer"]:
+                            answers.append(data)
+
+                    lead_id = await save_lead_data({"answers": answers})
+                    logger.info(f"Lead saved with ID: {lead_id}")
+                        
+                except Exception as save_error:
+                    logger.error(f"Error saving lead: {str(save_error)}")
+
+                # ✅ MENSAGEM FINAL SIMPLES - SEM WHATSAPP
+                notification_status = ""
+                if notification_result.get("notified") and notification_result.get("success"):
+                    notification_status = " ⚡ Nossa equipe foi imediatamente notificada!"
+                
+                final_message = f"""Perfeito, {first_name}! ✅
+
+Todas suas informações foram registradas com sucesso{notification_status}
+
+Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso com toda atenção necessária.
+
+Você fez a escolha certa ao confiar no escritório m.lima! 🤝
+
+Nossa equipe entrará em contato em alguns minutos."""
+
+                return final_message
+            
+            # ✅ WHATSAPP - FINALIZAÇÃO COM MENSAGEM ESTRATÉGICA
+            else:
+                # Extrair telefone
+                phone_clean = lead_data.get("phone", "")
+                if not phone_clean:
+                    contact_info = lead_data.get("contact_info", "")
+                    phone_match = re.search(r'(\d{10,11})', contact_info or "")
+                    phone_clean = phone_match.group(1) if phone_match else ""
+                    
+                if not phone_clean or len(phone_clean) < 10:
+                    return f"Para finalizar, {first_name}, preciso do seu WhatsApp com DDD (ex: 11999999999):"
+
+                # Formatar telefone
+                phone_formatted = self._format_brazilian_phone(phone_clean)
+                
+                # Atualizar dados da sessão
+                session_data.update({
+                    "phone_number": phone_clean,
+                    "phone_formatted": phone_formatted,
+                    "phone_submitted": True,
+                    "lead_qualified": True,
+                    "last_updated": ensure_utc(datetime.now(timezone.utc))
+                })
+                
+                await save_user_session(session_id, session_data)
+
+                # Notificar advogados se ainda não foram notificados
+                notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, platform)
+                
+                # Salvar lead data
+                try:
+                    answers = []
+                    field_mapping = {
+                        "identification": {"id": 1, "answer": lead_data.get("identification", "")},
+                        "contact_info": {"id": 2, "answer": lead_data.get("contact_info", "")},
+                        "area_qualification": {"id": 3, "answer": lead_data.get("area_qualification", "")},
+                        "case_details": {"id": 4, "answer": lead_data.get("case_details", "")},
+                        "confirmation": {"id": 5, "answer": lead_data.get("confirmation", "")}
+                    }
+                    
+                    for field, data in field_mapping.items():
+                        if data["answer"]:
+                            answers.append(data)
+                    
+                    if phone_clean:
+                        answers.append({"id": 99, "field": "phone_extracted", "answer": phone_clean})
+
+                    lead_id = await save_lead_data({"answers": answers})
+                    logger.info(f"Lead saved with ID: {lead_id}")
+                        
+                except Exception as save_error:
+                    logger.error(f"Error saving lead: {str(save_error)}")
+
+                # Enviar WhatsApp estratégico
+                area = lead_data.get("area_qualification", "direito")
+                strategic_message = self._get_strategic_whatsapp_message(user_name, area, phone_formatted)
+                
+                whatsapp_number = f"{phone_formatted}@s.whatsapp.net"
+                whatsapp_success = False
+                
+                try:
+                    await baileys_service.send_whatsapp_message(whatsapp_number, strategic_message)
+                    logger.info(f"📱 WhatsApp estratégico enviado com sucesso para {phone_formatted}")
+                    whatsapp_success = True
+                except Exception as whatsapp_error:
+                    logger.error(f"❌ Erro ao enviar WhatsApp estratégico: {str(whatsapp_error)}")
+
+                # Mensagem final personalizada
+                notification_status = ""
+                if notification_result.get("notified") and notification_result.get("success"):
+                    notification_status = " ⚡ Nossa equipe foi imediatamente notificada!"
+                
+                final_message = f"""Perfeito, {first_name}! ✅
+
+Todas suas informações foram registradas com sucesso{notification_status}
+
+Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso com toda atenção necessária.
+
+{'📱 Mensagem de confirmação enviada no seu WhatsApp!' if whatsapp_success else '📝 Suas informações foram salvas com segurança.'}
+
+Você fez a escolha certa ao confiar no escritório m.lima para cuidar do seu caso! 🤝
+
+Em alguns minutos, um especialista entrará em contato."""
+
+                return final_message
             
         except Exception as e:
-            logger.error(f"Error saving lead data: {str(e)}")
-            raise
-    
-    async def _send_whatsapp_confirmation(self, context: SessionContext):
-        """Send WhatsApp confirmation message"""
+            logger.error(f"Error in lead finalization: {str(e)}")
+            user_name = session_data.get("lead_data", {}).get("identification", "")
+            first_name = user_name.split()[0] if user_name else ""
+            return f"Obrigado pelas informações, {first_name}! Nossa equipe entrará em contato em breve. 😊"
+
+    async def _handle_phone_collection(self, phone_message: str, session_id: str, session_data: Dict[str, Any]) -> str:
+        """Coleta de telefone com toque humano"""
         try:
-            data = context.extracted_data
-            phone_formatted = self._format_brazilian_phone(data.phone)
-            whatsapp_number = f"{phone_formatted}@s.whatsapp.net"
+            phone_clean = ''.join(filter(str.isdigit, phone_message))
+            user_name = session_data.get("lead_data", {}).get("identification", "")
+            first_name = user_name.split()[0] if user_name else ""
             
-            first_name = data.name.split()[0] if data.name else "Cliente"
-            message = f"""Perfeito, {first_name}! ✅
+            if len(phone_clean) < 10 or len(phone_clean) > 13:
+                return f"Ops, {first_name}! Número inválido. Digite seu WhatsApp com DDD (ex: 11999999999):"
 
-Suas informações foram registradas com sucesso:
-• Nome: {data.name}
-• Área: {data.legal_area}
-
-Nossa equipe especializada foi notificada e entrará em contato em breve.
-
-Você fez a escolha certa ao confiar no m.lima! 🤝
-
----
-✉️ m.lima Advogados Associados"""
-            
-            await baileys_service.send_whatsapp_message(whatsapp_number, message)
-            logger.info(f"WhatsApp confirmation sent to {phone_formatted}")
+            session_data["lead_data"]["phone"] = phone_clean
+            return await self._handle_lead_finalization(session_id, session_data)
             
         except Exception as e:
-            logger.error(f"Error sending WhatsApp confirmation: {str(e)}")
+            logger.error(f"Error in phone collection: {str(e)}")
+            user_name = session_data.get("lead_data", {}).get("identification", "")
+            first_name = user_name.split()[0] if user_name else ""
+            return f"Obrigado, {first_name}! Nossa equipe entrará em contato em breve. 😊"
 
-# =================== GLOBAL INSTANCE ===================
+    async def process_message(self, message: str, session_id: str, phone_number: Optional[str] = None, platform: str = "web") -> Dict[str, Any]:
+        """Processamento principal com notificação inteligente"""
+        try:
+            logger.info(f"Processing message - Session: {session_id}, Platform: {platform}")
+            logger.info(f"Message: '{message}'")
 
-# Global instance with backward compatibility
+            session_data = await self._get_or_create_session(session_id, platform, phone_number)
+            
+            # Tratar coleta de telefone para leads qualificados
+            if (session_data.get("lead_qualified", False) and 
+                not session_data.get("phone_submitted", False) and 
+                self._is_phone_number(message)):
+                
+                phone_response = await self._handle_phone_collection(message, session_id, session_data)
+                return {
+                    "response_type": "phone_collected",
+                    "platform": platform,
+                    "session_id": session_id,
+                    "response": phone_response,
+                    "phone_submitted": True,
+                    "message_count": session_data.get("message_count", 0) + 1
+                }
+
+            # Processar fluxo principal
+            response = await self._process_conversation_flow(session_data, message)
+            
+            # Atualizar contadores
+            session_data["message_count"] = session_data.get("message_count", 0) + 1
+            session_data["last_updated"] = ensure_utc(datetime.now(timezone.utc))
+            await save_user_session(session_id, session_data)
+            
+            result = {
+                "response_type": f"{platform}_flow",
+                "platform": platform,
+                "session_id": session_id,
+                "response": response,
+                "ai_mode": False,
+                "current_step": session_data.get("current_step"),
+                "flow_completed": session_data.get("flow_completed", False),
+                "lawyers_notified": session_data.get("lawyers_notified", False),
+                "lead_data": session_data.get("lead_data", {}),
+                "message_count": session_data.get("message_count", 1),
+                "qualification_score": self._calculate_qualification_score(
+                    session_data.get("lead_data", {}), platform
+                )
+            }
+            
+            # Garantir que response sempre existe e é string
+            if not result.get("response") or not isinstance(result["response"], str):
+                result["response"] = "Como posso ajudá-lo hoje?"
+                logger.warning(f"⚠️ Response vazio corrigido para session {session_id}")
+            
+            return result
+
+        except Exception as e:
+            logger.error(f"Exception in process_message: {str(e)}")
+            return {
+                "response_type": "orchestration_error",
+                "platform": platform,
+                "session_id": session_id,
+                "response": self._get_personalized_greeting() or "Olá! Como posso ajudá-lo?",
+                "error": str(e)
+            }
+
+    async def handle_whatsapp_authorization(self, auth_data: Dict[str, Any]):
+        """Handler para autorização WhatsApp"""
+        try:
+            session_id = auth_data.get("session_id", "")
+            phone_number = auth_data.get("phone_number", "")
+            source = auth_data.get("source", "unknown")
+            user_data = auth_data.get("user_data", {})
+            
+            logger.info(f"🎯 Processando autorização WhatsApp - Session: {session_id}, Phone: {phone_number}, Source: {source}")
+            
+            # Se tem dados do usuário (ex: do chat da landing), criar sessão pré-populada
+            if user_data and source == "landing_chat":
+                session_data = {
+                    "session_id": session_id,
+                    "platform": "whatsapp",
+                    "phone_number": phone_number,
+                    "created_at": ensure_utc(datetime.now(timezone.utc)),
+                    "current_step": "completed",
+                    "lead_data": {
+                        "identification": user_data.get("name", ""),
+                        "contact_info": f"{phone_number} {user_data.get('email', '')}".strip(),
+                        "area_qualification": "não especificada",
+                        "case_details": user_data.get("problem", "Detalhes do chat da landing"),
+                        "phone": phone_number,
+                        "email": user_data.get("email", "")
+                    },
+                    "message_count": 1,
+                    "flow_completed": True,
+                    "phone_submitted": True,
+                    "lead_qualified": True,
+                    "lawyers_notified": False,
+                    "last_updated": ensure_utc(datetime.now(timezone.utc)),
+                    "first_interaction": False,
+                    "authorization_source": source
+                }
+                
+                await save_user_session(session_id, session_data)
+                
+                # Notificar advogados imediatamente para leads da landing
+                notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, "whatsapp")
+                
+                logger.info(f"✅ Sessão pré-populada criada para lead da landing - Session: {session_id}")
+                
+            else:
+                # Autorização de botão - criar sessão vazia para futuras mensagens
+                logger.info(f"📝 Autorização de botão registrada - Session: {session_id} - Aguardando primeira mensagem")
+            
+            return {
+                "status": "authorization_processed",
+                "session_id": session_id,
+                "phone_number": phone_number,
+                "source": source,
+                "pre_populated": bool(user_data and source == "landing_chat")
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no processamento da autorização WhatsApp: {str(e)}")
+            return {
+                "status": "authorization_error",
+                "error": str(e)
+            }
+
+    async def handle_phone_number_submission(self, phone_number: str, session_id: str) -> Dict[str, Any]:
+        """Handle phone number submission from web interface."""
+        try:
+            logger.info(f"Phone number submission for session {session_id}: {phone_number}")
+            session_data = await get_user_session(session_id) or {}
+            response = await self._handle_phone_collection(phone_number, session_id, session_data)
+            return {
+                "status": "success",
+                "message": response,
+                "phone_submitted": True
+            }
+        except Exception as e:
+            logger.error(f"Error in phone submission: {str(e)}")
+            return {
+                "status": "error",
+                "message": "Erro ao processar número de WhatsApp",
+                "error": str(e)
+            }
+
+    async def get_session_context(self, session_id: str) -> Dict[str, Any]:
+        """Get current session context and status."""
+        try:
+            session_data = await get_user_session(session_id)
+            if not session_data:
+                return {"exists": False}
+
+            context = {
+                "exists": True,
+                "session_id": session_id,
+                "platform": session_data.get("platform", "unknown"),
+                "current_step": session_data.get("current_step"),
+                "flow_completed": session_data.get("flow_completed", False),
+                "phone_submitted": session_data.get("phone_submitted", False),
+                "lawyers_notified": session_data.get("lawyers_notified", False),
+                "lead_data": session_data.get("lead_data", {}),
+                "message_count": session_data.get("message_count", 0),
+                "qualification_score": self._calculate_qualification_score(
+                    session_data.get("lead_data", {}), 
+                    session_data.get("platform", "web")
+                )
+            }
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error getting session context: {str(e)}")
+            return {"exists": False, "error": str(e)}
+
+
+# Global instance
 intelligent_orchestrator = IntelligentHybridOrchestrator()
-hybrid_orchestrator = intelligent_orchestrator  # Alias for compatibility
-
-# Background task for session cleanup (would be implemented as a separate service in production)
-async def cleanup_expired_sessions():
-    """Background task to clean up expired sessions"""
-    # This would typically be implemented as a separate Cloud Function or cron job
-    pass
+hybrid_orchestrator = intelligent_orchestrator

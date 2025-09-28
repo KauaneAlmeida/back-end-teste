@@ -255,17 +255,22 @@ async def whatsapp_webhook(request: Request):
 @router.post("/whatsapp/send-initial-message")
 async def send_initial_whatsapp_message(request: dict):
     """
-    DEPRECATED: This endpoint was for WhatsApp integration from chat.
-    The chat flow is now independent and doesn't redirect to WhatsApp.
-    This endpoint is kept for backward compatibility but should not be used.
+    ❌ ENDPOINT DEPRECIADO - CHAT DA LANDING É INDEPENDENTE
+    
+    O chat da landing agora é completamente independente e NÃO redireciona para WhatsApp.
+    Este endpoint foi mantido apenas para compatibilidade, mas não deve ser usado.
     """
     try:
-        logger.warning("⚠️ DEPRECATED endpoint /whatsapp/send-initial-message called")
+        logger.warning("⚠️ ENDPOINT DEPRECIADO /whatsapp/send-initial-message chamado")
         
         return {
             "status": "deprecated",
-            "message": "This endpoint is deprecated. Chat flow is now independent and doesn't redirect to WhatsApp.",
-            "note": "Use the chat flow directly or the WhatsApp button flow separately."
+            "message": "Este endpoint foi depreciado. O chat da landing é independente e não redireciona para WhatsApp.",
+            "note": "Use o chat da landing diretamente ou o botão WhatsApp separadamente.",
+            "flows": {
+                "chat_landing": "Fluxo independente que termina notificando advogados",
+                "botao_whatsapp": "Fluxo separado via botão direto para WhatsApp"
+            }
         }
             
     except HTTPException:
