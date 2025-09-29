@@ -1,434 +1,380 @@
-"""
-Conversation Flow Routes - CORRIGIDO SEM CONFLITOS
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>💬 Chat Advocacia — Escritório X!</title>
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: url('https://imgur.com/FKXnrb1.png') no-repeat center center fixed;
+      background-size: cover;
+    }
+    .chat-container {
+      max-width: 500px;
+      width: 100%;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 15px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 80vh;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s ease;
+    }
+    .chat-header {
+      background: #bd9b68;
+      color: white;
+      padding: 15px;
+      text-align: center;
+      font-size: 20px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 2px solid ;
+    }
+    .messages {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .message {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    .message.user { justify-content: flex-end; }
+    .bubble {
+      padding: 10px 15px;
+      border-radius: 15px;
+      max-width: 70%;
+      font-size: 14px;
+      line-height: 1.4;
+      position: relative;
+    }
+    .user .bubble {
+      background: #492519;
+      color: white;
+      border-bottom-right-radius: 0;
+    }
+    .bot .bubble {
+      background: #4682b4;
+      color: white;
+      border-bottom-left-radius: 0;
+    }
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid white;
+    }
+    .input-area {
+      display: flex;
+      border-top: 2px solid #444;
+      padding: 10px;
+      background: rgba(44, 44, 44, 0.9);
+    }
+    .input-area input {
+      flex: 1;
+      border: none;
+      border-radius: 20px;
+      padding: 12px;
+      font-size: 14px;
+      outline: none;
+      background: #444;
+      color: white;
+    }
+    .input-area input::placeholder { color: #bbb; }
+    .input-area button {
+      margin-left: 8px;
+      background: #ff9800;
+      border: none;
+      border-radius: 20px;
+      padding: 10px 20px;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    .input-area button:hover { background: #e07d00; }
+    .chat-reset-btn {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 15px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: 10px;
+      transition: 0.2s;
+    }
+    .chat-reset-btn:hover { background: #218838; }
+    .chat-completed {
+      background: rgba(40, 167, 69, 0.1);
+      border: 2px solid #28a745;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 10px 0;
+      text-align: center;
+    }
+    @media (max-width: 600px) {
+      .chat-container { width: 90%; height: 70vh; border-radius: 20px; margin: auto; }
+      .chat-header { font-size: 16px; padding: 10px; }
+      .bubble { font-size: 13px; max-width: 80%; }
+      .input-area input { font-size: 13px; padding: 10px; }
+      .input-area button { padding: 8px 16px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">💬 Chat Advocacia — Escritório X!</div>
+    <div id="messages" class="messages">
+      <div class="message bot">
+        <div class="bubble">Carregando...</div>
+        <img src="https://imgur.com/z9lvA3Z.png" class="avatar" alt="Bot">
+        <div class="bubble"> Bem-vindo ao escritório, pronto para conversar?</div>
+      </div>
+    </div>
+    <div class="input-area">
+      <input id="messageInput" type="text" placeholder="Digite sua mensagem... ⚖️">
+      <button onclick="sendMessage()">Enviar</button>
+      <button id="resetBtn" class="chat-reset-btn" onclick="resetChat()" style="display: none;">Nova Conversa</button>
+    </div>
+  </div>
 
-CORREÇÃO: Elimina auto-criação de sessão no /start
-Remove conflito de sessões duplicadas
-"""
+  <script>
+    // 🔗 URL do backend
+    const API_BASE_URL = 'https://law-firm-backend-936902782519-936902782519.us-central1.run.app';
+    
+    // 🎯 Estado do chat
+    let chatState = {
+      sessionId: null,
+      isCompleted: false,
+      messageCount: 0,
+      hasStarted: false
+    };
 
-import uuid
-import logging
-import json
-import os
-from typing import Dict, Any
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import JSONResponse
-
-from app.models.request import ConversationRequest
-from app.models.response import ConversationResponse
-from app.services.orchestration_service import intelligent_orchestrator
-
-# Logging
-logger = logging.getLogger(__name__)
-
-# FastAPI router
-router = APIRouter()
-
-
-@router.post("/conversation/start", response_model=ConversationResponse)
-async def start_conversation():
-    """
-    Start a new conversation session for web chat platform.
-    Returns initial greeting to start the chat flow.
-    """
-    try:
-        session_id = str(uuid.uuid4())
-        logger.info(f"🚀 Starting new web chat conversation | session={session_id}")
-
-        # Return initial greeting for chat flow
-        initial_greeting = "Olá! Bem-vindo ao m.lima Advogados. Para começar seu atendimento, digite uma saudação como 'oi' ou 'olá'."
+    // 🔄 Função para resetar o chat
+    function resetChat() {
+      console.log('🔄 Resetando chat...');
+      
+      // Limpar estado
+      chatState = {
+        sessionId: null,
+        isCompleted: false,
+        messageCount: 0,
+        hasStarted: false
+      };
+      
+      // Limpar localStorage
+      localStorage.removeItem('chat_session_id');
+      
+      // Limpar mensagens
+      const messagesDiv = document.getElementById('messages');
+      messagesDiv.innerHTML = `
+        <div class="message bot">
+          <img src="https://imgur.com/z9lvA3Z.png" class="avatar" alt="Bot">
+          <div class="bubble">Carregando...</div>
+        </div>
+      `;
+      
+      // Reabilitar input
+      const input = document.getElementById('messageInput');
+      const sendBtn = document.querySelector('button[onclick="sendMessage()"]');
+      
+      input.disabled = false;
+      input.placeholder = "Digite sua mensagem... ⚖️";
+      sendBtn.disabled = false;
+      
+      // Inicializar conversa automaticamente
+      setTimeout(() => initializeChat(), 500);
+      
+      console.log('✅ Chat resetado com sucesso');
+    }
+    
+    // 🎯 Função para inicializar chat com saudação personalizada
+    async function initializeChat() {
+      try {
+        console.log('🚀 Inicializando chat com saudação personalizada...');
         
-        response_data = ConversationResponse(
-            session_id=session_id,
-            response=initial_greeting,
-            ai_mode=False,
-            flow_completed=False,
-            phone_collected=False,
-            message_count=0
-        )
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Atualizar primeira mensagem com saudação personalizada
+          const firstMessage = document.querySelector('.message.bot .bubble');
+          if (firstMessage) {
+            firstMessage.textContent = data.response || data.question || "Olá! Como posso ajudá-lo?";
+          }
+          
+          if (data.session_id) {
+            chatState.sessionId = data.session_id;
+            localStorage.setItem('chat_session_id', data.session_id);
+          }
+          
+          chatState.hasStarted = true;
+          console.log('✅ Chat inicializado com sucesso');
+        } else {
+          console.error('❌ Erro ao inicializar chat');
+          const firstMessage = document.querySelector('.message.bot .bubble');
+          if (firstMessage) {
+            firstMessage.textContent = "Olá! Como posso ajudá-lo hoje?";
+          }
+        }
+      } catch (err) {
+        console.error('❌ Erro na inicialização:', err);
+        const firstMessage = document.querySelector('.message.bot .bubble');
+        if (firstMessage) {
+          firstMessage.textContent = "Olá! Como posso ajudá-lo hoje?";
+        }
+      }
+    }
+
+    function addMessage(text, sender = 'user') {
+      const messagesDiv = document.getElementById('messages');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${sender}`;
+
+      const avatar = document.createElement('img');
+      avatar.className = 'avatar';
+      avatar.src = sender === 'user' 
+        ? 'https://imgur.com/P9aCUJC.png'
+        : 'https://imgur.com/z9lvA3Z.png';
+      avatar.alt = sender;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+
+      if (sender === 'user') {
+        messageDiv.appendChild(bubble);
+        messageDiv.appendChild(avatar);
+      } else {
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(bubble);
+      }
+
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      
+      chatState.messageCount++;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('messageInput');
+      const text = input.value.trim();
+      if (!text) return;
+      
+      addMessage(text, 'user');
+      input.value = '';
+      
+        console.log('🆕 Nova sessão criada:', chatState.sessionId);
+      }
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/respond`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message: text, 
+            session_id: chatState.sessionId
+          })
+        });
+
+        if (!response.ok) throw new Error('Erro na API');
+        const data = await response.json();
+
+        // Atualizar sessionId se retornado
+        if (data.session_id && data.session_id !== chatState.sessionId) {
+          chatState.sessionId = data.session_id;
+          localStorage.setItem('chat_session_id', data.session_id);
+        }
+
+        const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
+        addMessage(botMessage, 'bot');
         
-        logger.info(f"✅ Web chat conversation prepared | session={session_id}")
+        // Verificar se conversa foi finalizada
+        if (data.flow_completed || data.lawyers_notified || 
+            (data.response && data.response.includes('Nossa equipe entrará em contato'))) {
+          console.log('🎯 Conversa finalizada detectada');
+          setTimeout(() => markChatCompleted(), 1000);
+        }
+
+      } catch (err) {
+        console.error('API Error:', err);
+        addMessage("⚠️ Erro de conexão com o backend.", 'bot');
+      }
+    }
+
+    window.addEventListener('load', async () => {
+      console.log('🚀 Inicializando chat...');
+      
+      // Verificar se há sessão salva
+      const savedSessionId = localStorage.getItem('chat_session_id');
+      if (savedSessionId) {
+        console.log('📋 Sessão encontrada:', savedSessionId);
+        chatState.sessionId = savedSessionId;
         
-        return JSONResponse(
-            content=response_data.dict(),
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Credentials": "true",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+        // Verificar status da sessão
+        try {
+          const statusResponse = await fetch(`${API_BASE_URL}/api/v1/conversation/status/${savedSessionId}`);
+          if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            if (statusData.status_info && statusData.status_info.flow_completed) {
+              console.log('📋 Sessão anterior finalizada - permitindo nova conversa');
+              resetChat();
+              return;
             }
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Error starting web chat conversation: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start chat conversation: {str(e)}"
-        )
-
-
-@router.post("/conversation/respond", response_model=ConversationResponse)
-async def respond_to_conversation(request: ConversationRequest):
-    """
-    Process user response in web chat flow.
-    This is for the landing page chat - independent flow that ends with lawyer notification.
-    """
-    try:
-        # Generate session ID if not provided
-        if not request.session_id:
-            request.session_id = str(uuid.uuid4())
-            logger.info(f"🆕 Generated new web chat session: {request.session_id}")
-
-        logger.info(f"📝 Processing web chat response | session={request.session_id} | msg='{request.message[:50]}...'")
-
-        # Process message through orchestrator for web chat flow
-        result = await intelligent_orchestrator.process_message(
-            request.message,
-            request.session_id,
-            platform="web"
-        )
-        
-        response_data = ConversationResponse(
-            session_id=request.session_id,
-            response=result.get("response", "Como posso ajudá-lo?"),
-            ai_mode=result.get("ai_mode", False),
-            flow_completed=result.get("flow_completed", False),
-            phone_collected=result.get("phone_collected", False),
-            message_count=result.get("message_count", 1)
-        )
-        
-        # Log completion status
-        if response_data.flow_completed:
-            logger.info(f"🎉 Web chat flow completed - lawyers notified | session={request.session_id}")
-        
-        return JSONResponse(
-            content=response_data.dict(),
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Credentials": "true",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization"
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Error processing web chat response | session={getattr(request, 'session_id', 'unknown')}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process chat response: {str(e)}"
-        )
-
-
-@router.post("/conversation/submit-phone")
-async def submit_phone_number(request: dict):
-    """
-    Submit phone number - UNIFIED through orchestrator only
-    """
-    try:
-        phone_number = request.get("phone_number", "").strip()
-        session_id = request.get("session_id", "").strip()
-        
-        if not phone_number or not session_id:
-            logger.warning(f"⚠️ Invalid phone submission | phone={bool(phone_number)} | session={bool(session_id)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Missing phone_number or session_id"
-            )
-        
-        logger.info(f"📱 Phone number submitted | session={session_id} | number={phone_number}")
-
-        # CORREÇÃO: Usar handle_phone_number_submission do orchestrator
-        result = await intelligent_orchestrator.handle_phone_number_submission(
-            phone_number, 
-            session_id
-        )
-        
-        logger.info(f"✅ Phone submission processed | session={session_id} | success={result.get('status', 'unknown')}")
-        
-        return {
-            **result,
-            "timestamp": datetime.now().isoformat(),
-            "platform": "web"
+          }
+        } catch (e) {
+          console.log('⚠️ Erro ao verificar status - iniciando nova sessão');
+          resetChat();
+          return;
         }
+      }
+      
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Error processing phone submission | session={request.get('session_id', 'unknown')}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process phone number submission: {str(e)}"
-        )
-
-
-@router.get("/conversation/status/{session_id}")
-async def get_conversation_status(session_id: str):
-    """
-    Get current conversation state - UNIFIED through orchestrator only
-    """
-    try:
-        logger.info(f"📊 Fetching conversation status | session={session_id}")
-        
-        status_info = await intelligent_orchestrator.get_session_context(session_id)
-        
-        # Determine platform from session_id
-        platform = "whatsapp" if session_id.startswith("whatsapp_") else "web"
-        
-        return {
-            "session_id": session_id,
-            "platform": platform,
-            "status_info": status_info,
-            "timestamp": datetime.now().isoformat()
+        if (response.ok) {
+          const data = await response.json();
+          if (data.session_id && !chatState.sessionId) {
+            chatState.sessionId = data.session_id;
+            localStorage.setItem('chat_session_id', data.session_id);
+          }
+          if (data.question) {
+            addMessage(data.question, 'bot');
+          } else if (data.response) {
+            addMessage(data.response, 'bot');
+          }
         }
+      } catch (err) {
+        console.error('❌ Falha ao inicializar conversa:', err);
+      }
+    });
 
-    except Exception as e:
-        logger.error(f"❌ Error getting status for session {session_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get conversation status: {str(e)}"
-        )
-
-
-@router.get("/conversation/flow")
-async def get_conversation_flow():
-    """
-    Get current conversation approach information - UNIFIED system
-    """
-    try:
-        return {
-            "approach": "unified_intelligent_orchestrator",
-            "description": "Single orchestrator handles all platforms with session conflict resolved",
-            "status": "SESSION_CONFLICTS_RESOLVED",
-            "platforms": {
-                "web": {
-                    "method": "Intelligent orchestrator with structured flow",
-                    "description": "Session created only on first message (not on /start)",
-                    "fields": ["identification", "contact_info", "area_qualification", "case_details", "confirmation"],
-                    "completion": "Lead qualification + lawyer notification"
-                },
-                "whatsapp": {
-                    "method": "Same intelligent orchestrator",
-                    "description": "Consistent flow across platforms", 
-                    "fields": ["identification", "contact_info", "area_qualification", "case_details", "confirmation"],
-                    "completion": "Lead qualification + lawyer notification"
-                }
-            },
-            "corrections_applied": [
-                "Removed session pre-creation in /start endpoint",
-                "Session now created only in /respond when needed",
-                "Eliminated double session creation conflict",
-                "Fixed greeting loop issue",
-                "Unified all processing through intelligent_orchestrator"
-            ],
-            "flow_sequence": {
-                "step_0": "User calls /start -> Gets instructions (no session created)",
-                "step_1": "User sends greeting -> Session created in /respond",
-                "step_2": "Nome completo",
-                "step_3": "Informações de contato (telefone/email)", 
-                "step_4": "Área jurídica (Penal ou Saúde)",
-                "step_5": "Detalhes do caso",
-                "step_6": "Confirmação e finalização"
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"❌ Error retrieving conversation flow info: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve conversation flow information: {str(e)}"
-        )
-
-
-@router.get("/conversation/service-status")
-async def conversation_service_status():
-    """
-    Check service health - UNIFIED status from orchestrator
-    """
-    try:
-        # Get status from unified orchestrator only
-        service_status = await intelligent_orchestrator.get_overall_service_status()
-
-        return {
-            "service": "unified_intelligent_orchestrator",
-            "status": service_status.get("overall_status", "unknown"),
-            "approach": "single_orchestrator_no_session_conflicts",
-            "conflicts_resolved": True,
-            "session_creation": "lazy_creation_on_first_message",
-            "removed_conflicts": [
-                "Auto-creation of sessions in /start endpoint",
-                "Duplicate session initialization",
-                "Greeting detection loop",
-                "ConversationManager dependencies"
-            ],
-            "firebase_status": service_status.get("firebase_status", {"status": "unknown"}),
-            "ai_status": service_status.get("ai_status", {"status": "unknown"}),
-            "features": service_status.get("features", {}),
-            "platforms": {
-                "web": {
-                    "method": "Unified intelligent orchestrator",
-                    "status": "active",
-                    "session_management": "lazy_creation"
-                },
-                "whatsapp": {
-                    "method": "Unified intelligent orchestrator", 
-                    "status": "ready_for_integration",
-                    "session_management": "lazy_creation"
-                }
-            },
-            "endpoints": {
-                "start": "/api/v1/conversation/start (no session creation)",
-                "respond": "/api/v1/conversation/respond (creates session if needed)", 
-                "submit_phone": "/api/v1/conversation/submit-phone",
-                "status": "/api/v1/conversation/status/{session_id}",
-                "flow_info": "/api/v1/conversation/flow",
-                "service_status": "/api/v1/conversation/service-status"
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"❌ Error getting conversation service status: {str(e)}")
-        return {
-            "service": "unified_intelligent_orchestrator", 
-            "status": "error", 
-            "conflicts_resolved": False,
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-
-@router.post("/conversation/reset-session/{session_id}")
-async def reset_conversation_session(session_id: str):
-    """
-    Reset a conversation session - permite nova conversa
-    """
-    try:
-        logger.info(f"🔄 RESETANDO SESSÃO: {session_id}")
-        
-        # ✅ RESET COMPLETO DA SESSÃO
-        from app.services.firebase_service import reset_user_session
-        try:
-            # Criar nova sessão limpa
-            clean_session = {
-                "session_id": session_id,
-                "platform": "whatsapp" if session_id.startswith("whatsapp_") else "web",
-                "created_at": datetime.now(timezone.utc),
-                "current_step": "step1_name",
-                "lead_data": {},
-                "message_count": 0,
-                "flow_completed": False,
-                "phone_submitted": False,
-                "lawyers_notified": False,
-                "last_updated": datetime.now(timezone.utc),
-                "first_interaction": True,
-                "reset_at": datetime.now(timezone.utc),
-                "reset_count": 1
-            }
-            
-            result = await save_user_session(session_id, clean_session)
-            logger.info(f"✅ Sessão {session_id} resetada com sucesso")
-            
-        except Exception as reset_error:
-            logger.error(f"❌ Erro ao resetar sessão: {str(reset_error)}")
-            result = False
-        
-        return {
-            "status": "success" if result else "error",
-            "message": f"✅ Sessão {session_id} resetada - pronta para nova conversa" if result else "❌ Erro ao resetar sessão",
-            "session_id": session_id,
-            "reset_successful": result,
-            "new_conversation_ready": result,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error resetting session {session_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reset session: {str(e)}"
-        )
-
-
-@router.get("/conversation/debug/session-conflicts")
-async def debug_session_conflicts():
-    """
-    Debug endpoint específico para conflitos de sessão
-    """
-    try:
-        return {
-            "session_conflicts_status": "RESOLVED",
-            "issue_identified": "Double session creation causing greeting loop",
-            "root_cause": "/start endpoint was pre-creating empty sessions",
-            "solution_applied": {
-                "conversation_routes.py": [
-                    "Removed session pre-creation in start_conversation()",
-                    "Session now created only in respond_to_conversation()",
-                    "Lazy session initialization pattern implemented"
-                ],
-                "chat.js": [
-                    "Removed initializeChatConversation() auto-call",
-                    "Chat starts with local message only",
-                    "First user message triggers session creation"
-                ],
-                "intelligent_orchestrator.py": [
-                    "Simplified session state management",
-                    "Clear step progression without conflicts",
-                    "Fixed greeting detection logic"
-                ]
-            },
-            "flow_now": [
-                "1. Frontend loads -> Shows instructions (no backend call)",
-                "2. User types greeting -> /respond creates session",
-                "3. Orchestrator detects greeting -> Starts flow",
-                "4. Sequential questions -> Lead completion"
-            ],
-            "whatsapp_integration": {
-                "status": "ready",
-                "method": "Same orchestrator, different platform parameter",
-                "baileys_integration": "await intelligent_orchestrator.process_message(msg, session_id, platform='whatsapp')"
-            },
-            "test_instructions": [
-                "1. Open chat widget",
-                "2. Should show: 'Para começar nosso atendimento, digite uma saudação como oi'",
-                "3. Type 'oi'",
-                "4. Should ask for name (no loop)",
-                "5. Continue with flow normally"
-            ],
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        return {"error": str(e), "timestamp": datetime.now().isoformat()}
-
-
-# CORREÇÃO: Endpoint adicional para debug do fluxo
-@router.get("/conversation/debug/flow-test/{session_id}")
-async def debug_flow_test(session_id: str):
-    """
-    Test flow progression for a specific session
-    """
-    try:
-        session_context = await intelligent_orchestrator.get_session_context(session_id)
-        
-        return {
-            "session_id": session_id,
-            "exists": session_context.get("exists", False),
-            "current_step": session_context.get("current_step", "not_started"),
-            "flow_completed": session_context.get("flow_completed", False),
-            "lead_data": session_context.get("lead_data", {}),
-            "message_count": session_context.get("message_count", 0),
-            "debug_info": {
-                "session_creation": "lazy_on_first_message",
-                "conflict_status": "resolved",
-                "orchestrator": "intelligent_hybrid_simplified"
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error in flow test for session {session_id}: {str(e)}")
-        return {
-            "error": str(e),
-            "session_id": session_id,
-            "timestamp": datetime.now().isoformat()
-        }
+    document.getElementById('messageInput').addEventListener('keypress', e => {
+      if (e.key === 'Enter' && !chatState.isCompleted) {
+        sendMessage();
+      }
+    });
+  </script>
+</body>
+</html>
