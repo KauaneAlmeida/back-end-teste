@@ -1,341 +1,380 @@
-"""
-LangChain + Gemini Integration Service
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>💬 Chat Advocacia — Escritório X!</title>
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: url('https://imgur.com/FKXnrb1.png') no-repeat center center fixed;
+      background-size: cover;
+    }
+    .chat-container {
+      max-width: 500px;
+      width: 100%;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 15px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 80vh;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s ease;
+    }
+    .chat-header {
+      background: #bd9b68;
+      color: white;
+      padding: 15px;
+      text-align: center;
+      font-size: 20px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 2px solid ;
+    }
+    .messages {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .message {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    .message.user { justify-content: flex-end; }
+    .bubble {
+      padding: 10px 15px;
+      border-radius: 15px;
+      max-width: 70%;
+      font-size: 14px;
+      line-height: 1.4;
+      position: relative;
+    }
+    .user .bubble {
+      background: #492519;
+      color: white;
+      border-bottom-right-radius: 0;
+    }
+    .bot .bubble {
+      background: #4682b4;
+      color: white;
+      border-bottom-left-radius: 0;
+    }
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid white;
+    }
+    .input-area {
+      display: flex;
+      border-top: 2px solid #444;
+      padding: 10px;
+      background: rgba(44, 44, 44, 0.9);
+    }
+    .input-area input {
+      flex: 1;
+      border: none;
+      border-radius: 20px;
+      padding: 12px;
+      font-size: 14px;
+      outline: none;
+      background: #444;
+      color: white;
+    }
+    .input-area input::placeholder { color: #bbb; }
+    .input-area button {
+      margin-left: 8px;
+      background: #ff9800;
+      border: none;
+      border-radius: 20px;
+      padding: 10px 20px;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    .input-area button:hover { background: #e07d00; }
+    .chat-reset-btn {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 15px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: 10px;
+      transition: 0.2s;
+    }
+    .chat-reset-btn:hover { background: #218838; }
+    .chat-completed {
+      background: rgba(40, 167, 69, 0.1);
+      border: 2px solid #28a745;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 10px 0;
+      text-align: center;
+    }
+    @media (max-width: 600px) {
+      .chat-container { width: 90%; height: 70vh; border-radius: 20px; margin: auto; }
+      .chat-header { font-size: 16px; padding: 10px; }
+      .bubble { font-size: 13px; max-width: 80%; }
+      .input-area input { font-size: 13px; padding: 10px; }
+      .input-area button { padding: 8px 16px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">💬 Chat Advocacia — Escritório X!</div>
+    <div id="messages" class="messages">
+      <div class="message bot">
+        <div class="bubble">Carregando...</div>
+        <img src="https://imgur.com/z9lvA3Z.png" class="avatar" alt="Bot">
+        <div class="bubble"> Bem-vindo ao escritório, pronto para conversar?</div>
+      </div>
+    </div>
+    <div class="input-area">
+      <input id="messageInput" type="text" placeholder="Digite sua mensagem... ⚖️">
+      <button onclick="sendMessage()">Enviar</button>
+      <button id="resetBtn" class="chat-reset-btn" onclick="resetChat()" style="display: none;">Nova Conversa</button>
+    </div>
+  </div>
 
-Este módulo integra o LangChain com o Google Gemini para gerenciamento de
-conversas inteligentes, memória e geração de respostas contextuais.
-"""
+  <script>
+    // 🔗 URL do backend
+    const API_BASE_URL = 'https://law-firm-backend-936902782519-936902782519.us-central1.run.app';
+    
+    // 🎯 Estado do chat
+    let chatState = {
+      sessionId: null,
+      isCompleted: false,
+      messageCount: 0,
+      hasStarted: false
+    };
 
-import os
-import logging
-import json
-import asyncio
-from typing import Dict, Any, Optional
-from dotenv import load_dotenv
-from langchain.memory import ConversationBufferWindowMemory
-from langchain.schema import HumanMessage, AIMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-logger = logging.getLogger(__name__)
-
-# Global conversation memories
-conversation_memories: Dict[str, ConversationBufferWindowMemory] = {}
-
-
-class AIOrchestrator:
-    """AI Orchestrator using LangChain + Gemini for intelligent conversation management."""
-
-    def __init__(self):
-        self.llm = None
-        self.system_prompt = None
-        self.chain = None
-        self._initialize_llm()
-        self._load_system_prompt()
-        self._setup_chain()
-
-    def _initialize_llm(self):
-        """Initialize Gemini LLM via LangChain."""
-        try:
-            # Get API key from environment - try both variable names
-            api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-            
-            if not api_key:
-                logger.warning("⚠️ GOOGLE_API_KEY or GEMINI_API_KEY environment variable not set")
-                self.llm = None
-                return
-
-            self.llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
-                google_api_key=api_key,
-                temperature=0.7,
-                max_tokens=1000,
-                timeout=30,
-                convert_system_message_to_human=True
-            )
-            logger.info("✅ LangChain + Gemini LLM initialized successfully")
-        except Exception as e:
-            logger.error(f"❌ Error initializing LLM: {str(e)}")
-            self.llm = None
-
-    def _load_system_prompt(self):
-        """Load system prompt from .env, JSON file, or use default."""
-        try:
-            env_prompt = os.getenv("AI_SYSTEM_PROMPT")
-            if env_prompt:
-                self.system_prompt = env_prompt
-                logger.info("✅ System prompt loaded from environment variable")
-                return
-
-            schema_file = "ai_schema.json"
-            if os.path.exists(schema_file):
-                with open(schema_file, "r", encoding="utf-8") as f:
-                    schema_data = json.load(f)
-                    self.system_prompt = schema_data.get("system_prompt", "")
-                    if self.system_prompt:
-                        logger.info("✅ System prompt loaded from ai_schema.json")
-                        return
-
-            self.system_prompt = self._get_default_system_prompt()
-            logger.info("✅ Using default system prompt")
-            
-        except Exception as e:
-            logger.error(f"❌ Error loading system prompt: {str(e)}")
-            self.system_prompt = self._get_default_system_prompt()
-
-    def _get_default_system_prompt(self) -> str:
-        """Default system prompt para coleta de informações jurídicas no WhatsApp."""
-        return """Você é um assistente virtual de um escritório de advocacia no Brasil. 
-Seu papel é apenas **coletar informações básicas do cliente** para que um advogado humano dê continuidade.
-
-
-## INFORMAÇÕES A COLETAR:
-1. Nome completo.
-2. Área jurídica (apenas Penal ou Saúde Liminar).
-3. Breve descrição da situação.
-4. Número de WhatsApp válido (com DDD).
-5. Encerrar agradecendo e avisando que o time jurídico entrará em contato.
-
-## REGRAS IMPORTANTES:
-- Sempre responda em português brasileiro.
-- Não repita a mesma pergunta da mesma forma se o cliente não souber responder; reformule de forma natural.
-- Nunca ofereça agendamento automático ou horários de consulta.
-- Não escreva textos longos: use no máximo 2 frases por resposta.
-- Confirme cada informação antes de seguir para a próxima.
-- A ordem da coleta é: Nome completo → Área jurídica (Penal ou Saúde Liminar) → Descrição da situação → Número de WhatsApp.
-- Peça o número de WhatsApp **somente no final**.
-- Use linguagem simples, direta e acolhedora.
-- Sempre caminhe para coletar todas as informações, sem pressionar.
-- Para área jurídica, aceite apenas "Penal" ou "Saúde Liminar" - não aceite outras áreas.
-
-## FORMATO DA CONVERSA:
-- Seja objetivo e humano, como em uma conversa normal de WhatsApp.
-- Sempre finalize cada mensagem com uma pergunta que leve o cliente a responder.
-- Se já tiver a resposta de algum item no contexto, não repita a pergunta.
-
-Você **não agenda consultas**, apenas coleta as informações e organiza para o time jurídico."""
-
-    def _setup_chain(self):
-        """Create LangChain conversation chain."""
-        try:
-            if self.llm is None:
-                logger.warning("⚠️ Cannot setup chain - LLM not initialized")
-                self.chain = None
-                return
-                
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", self.system_prompt),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{input}"),
-            ])
-
-            self.chain = (
-                RunnablePassthrough.assign(
-                    history=lambda x: self._get_session_history(
-                        x.get("session_id", "default")
-                    )
-                )
-                | prompt
-                | self.llm
-                | StrOutputParser()
-            )
-            logger.info("✅ LangChain conversation chain setup complete")
-        except Exception as e:
-            logger.error(f"❌ Error setting up chain: {str(e)}")
-            self.chain = None
-
-    def _get_session_history(self, session_id: str) -> list:
-        """Get session conversation history."""
-        if session_id not in conversation_memories:
-            conversation_memories[session_id] = ConversationBufferWindowMemory(
-                k=10, return_messages=True
-            )
-        return conversation_memories[session_id].chat_memory.messages
-
-    async def generate_response(
-        self, 
-        message: str, 
-        session_id: str = "default",
-        context: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """Generate AI response using LangChain + Gemini with context."""
-        try:
-            if self.llm is None:
-                raise Exception("LLM not initialized - check API key configuration")
-                
-            if session_id not in conversation_memories:
-                conversation_memories[session_id] = ConversationBufferWindowMemory(
-                    k=10, return_messages=True
-                )
-
-            memory = conversation_memories[session_id]
-            
-            contextual_message = message
-            if context and isinstance(context, dict):
-                context_info = []
-                if context.get("name"):
-                    context_info.append(f"Nome: {context['name']}")
-                if context.get("area_of_law"):
-                    context_info.append(f"Área jurídica: {context['area_of_law']}")
-                if context.get("situation"):
-                    context_info.append(f"Situação: {context['situation']}")
-                if context.get("platform"):
-                    context_info.append(f"Plataforma: {context['platform']}")
-                
-                if context_info:
-                    contextual_message = f"[Contexto: {'; '.join(context_info)}] {message}"
-
-            # Add timeout and better error handling
-            
-            try:
-                response = await asyncio.wait_for(
-                    self.chain.ainvoke({
-                        "input": contextual_message, 
-                        "session_id": session_id
-                    }),
-                    timeout=15.0  # 15 second timeout
-                )
-            except asyncio.TimeoutError:
-                logger.error("⏰ Gemini API request timed out")
-                raise Exception("API timeout - quota may be exceeded")
-            except Exception as api_error:
-                # Check for quota/rate limit errors
-                error_str = str(api_error).lower()
-                if any(indicator in error_str for indicator in ["429", "quota", "rate limit", "resourceexhausted", "billing"]):
-                    logger.error(f"🚫 Gemini API quota/rate limit error: {api_error}")
-                    raise Exception(f"Quota exceeded: {api_error}")
-                else:
-                    logger.error(f"❌ Gemini API error: {api_error}")
-                    raise api_error
-
-            memory.chat_memory.add_user_message(message)
-            memory.chat_memory.add_ai_message(response)
-
-            logger.info(f"✅ Generated AI response for session {session_id}")
-            return response
-
-        except Exception as e:
-            logger.error(f"❌ Error generating response: {str(e)}")
-            # Re-raise the exception so orchestrator can handle it properly
-            raise e
-
-    def _get_fallback_response(self) -> str:
-        """Fallback response when AI fails."""
-        return (
-            "Peço desculpas, mas estou enfrentando dificuldades técnicas no momento.\n\n"
-            "Para garantir que você receba o melhor atendimento jurídico, recomendo "
-            "que entre em contato diretamente com nossa equipe pelo telefone "
-            "ou agende uma consulta presencial."
-        )
-
-    def clear_session_memory(self, session_id: str):
-        """Clear memory for a specific session."""
-        if session_id in conversation_memories:
-            del conversation_memories[session_id]
-            logger.info(f"🧹 Cleared memory for session {session_id}")
-
-    def get_conversation_summary(self, session_id: str) -> Dict[str, Any]:
-        """Get conversation summary for a session."""
-        if session_id not in conversation_memories:
-            return {"messages": 0, "summary": "No conversation history"}
-
-        messages = conversation_memories[session_id].chat_memory.messages
-        return {
-            "messages": len(messages),
-            "last_messages": [
-                {
-                    "type": "human" if isinstance(m, HumanMessage) else "ai",
-                    "content": m.content[:100] + ("..." if len(m.content) > 100 else ""),
-                }
-                for m in messages[-4:]
-            ],
-        }
-
-    def get_system_prompt(self) -> str:
-        """Get current system prompt."""
-        return self.system_prompt
-
-
-# Global AI orchestrator instance
-ai_orchestrator = AIOrchestrator()
-
-
-# Convenience functions for backward compatibility
-async def process_chat_message(
-    message: str, 
-    session_id: str = "default", 
-    context: Optional[Dict[str, Any]] = None
-) -> str:
-    """Process chat message with LangChain + Gemini."""
-    return await ai_orchestrator.generate_response(message, session_id, context)
-
-
-def clear_conversation_memory(session_id: str):
-    """Clear conversation memory for session."""
-    ai_orchestrator.clear_session_memory(session_id)
-
-
-def get_conversation_summary(session_id: str) -> Dict[str, Any]:
-    """Get conversation summary."""
-    return ai_orchestrator.get_conversation_summary(session_id)
-
-
-async def get_ai_service_status() -> Dict[str, Any]:
-    """Get AI service status."""
-    try:
-        # Quick test without generating a full response to avoid quota usage
-        api_key_configured = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+    // 🔄 Função para resetar o chat
+    function resetChat() {
+      console.log('🔄 Resetando chat...');
+      
+      // Limpar estado
+      chatState = {
+        sessionId: null,
+        isCompleted: false,
+        messageCount: 0,
+        hasStarted: false
+      };
+      
+      // Limpar localStorage
+      localStorage.removeItem('chat_session_id');
+      
+      // Limpar mensagens
+      const messagesDiv = document.getElementById('messages');
+      messagesDiv.innerHTML = `
+        <div class="message bot">
+          <img src="https://imgur.com/z9lvA3Z.png" class="avatar" alt="Bot">
+          <div class="bubble">Carregando...</div>
+        </div>
+      `;
+      
+      // Reabilitar input
+      const input = document.getElementById('messageInput');
+      const sendBtn = document.querySelector('button[onclick="sendMessage()"]');
+      
+      input.disabled = false;
+      input.placeholder = "Digite sua mensagem... ⚖️";
+      sendBtn.disabled = false;
+      
+      // Inicializar conversa automaticamente
+      setTimeout(() => initializeChat(), 500);
+      
+      console.log('✅ Chat resetado com sucesso');
+    }
+    
+    // 🎯 Função para inicializar chat com saudação personalizada
+    async function initializeChat() {
+      try {
+        console.log('🚀 Inicializando chat com saudação personalizada...');
         
-        if not api_key_configured:
-            return {
-                "service": "ai_service",
-                "status": "configuration_required",
-                "error": "API key not configured",
-                "api_key_configured": False,
-                "configuration_required": True,
-            }
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Atualizar primeira mensagem com saudação personalizada
+          const firstMessage = document.querySelector('.message.bot .bubble');
+          if (firstMessage) {
+            firstMessage.textContent = data.response || data.question || "Olá! Como posso ajudá-lo?";
+          }
+          
+          if (data.session_id) {
+            chatState.sessionId = data.session_id;
+            localStorage.setItem('chat_session_id', data.session_id);
+          }
+          
+          chatState.hasStarted = true;
+          console.log('✅ Chat inicializado com sucesso');
+        } else {
+          console.error('❌ Erro ao inicializar chat');
+          const firstMessage = document.querySelector('.message.bot .bubble');
+          if (firstMessage) {
+            firstMessage.textContent = "Olá! Como posso ajudá-lo hoje?";
+          }
+        }
+      } catch (err) {
+        console.error('❌ Erro na inicialização:', err);
+        const firstMessage = document.querySelector('.message.bot .bubble');
+        if (firstMessage) {
+          firstMessage.textContent = "Olá! Como posso ajudá-lo hoje?";
+        }
+      }
+    }
+
+    function addMessage(text, sender = 'user') {
+      const messagesDiv = document.getElementById('messages');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${sender}`;
+
+      const avatar = document.createElement('img');
+      avatar.className = 'avatar';
+      avatar.src = sender === 'user' 
+        ? 'https://imgur.com/P9aCUJC.png'
+        : 'https://imgur.com/z9lvA3Z.png';
+      avatar.alt = sender;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+
+      if (sender === 'user') {
+        messageDiv.appendChild(bubble);
+        messageDiv.appendChild(avatar);
+      } else {
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(bubble);
+      }
+
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      
+      chatState.messageCount++;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('messageInput');
+      const text = input.value.trim();
+      if (!text) return;
+      
+      addMessage(text, 'user');
+      input.value = '';
+      
+        console.log('🆕 Nova sessão criada:', chatState.sessionId);
+      }
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/respond`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message: text, 
+            session_id: chatState.sessionId
+          })
+        });
+
+        if (!response.ok) throw new Error('Erro na API');
+        const data = await response.json();
+
+        // Atualizar sessionId se retornado
+        if (data.session_id && data.session_id !== chatState.sessionId) {
+          chatState.sessionId = data.session_id;
+          localStorage.setItem('chat_session_id', data.session_id);
+        }
+
+        const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
+        addMessage(botMessage, 'bot');
         
-        # Test LLM initialization without making API calls
-        if ai_orchestrator.llm is None:
-            return {
-                "service": "ai_service",
-                "status": "error",
-                "error": "LLM not initialized",
-                "api_key_configured": api_key_configured,
-                "configuration_required": True,
+        // Verificar se conversa foi finalizada
+        if (data.flow_completed || data.lawyers_notified || 
+            (data.response && data.response.includes('Nossa equipe entrará em contato'))) {
+          console.log('🎯 Conversa finalizada detectada');
+          setTimeout(() => markChatCompleted(), 1000);
+        }
+
+      } catch (err) {
+        console.error('API Error:', err);
+        addMessage("⚠️ Erro de conexão com o backend.", 'bot');
+      }
+    }
+
+    window.addEventListener('load', async () => {
+      console.log('🚀 Inicializando chat...');
+      
+      // Verificar se há sessão salva
+      const savedSessionId = localStorage.getItem('chat_session_id');
+      if (savedSessionId) {
+        console.log('📋 Sessão encontrada:', savedSessionId);
+        chatState.sessionId = savedSessionId;
+        
+        // Verificar status da sessão
+        try {
+          const statusResponse = await fetch(`${API_BASE_URL}/api/v1/conversation/status/${savedSessionId}`);
+          if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            if (statusData.status_info && statusData.status_info.flow_completed) {
+              console.log('📋 Sessão anterior finalizada - permitindo nova conversa');
+              resetChat();
+              return;
             }
-
-        return {
-            "service": "ai_service",
-            "status": "active",
-            "message": "LangChain + Gemini operational",
-            "llm_initialized": True,
-            "system_prompt_configured": bool(ai_orchestrator.system_prompt),
-            "api_key_configured": api_key_configured,
-            "features": [
-                "langchain_integration",
-                "gemini_api",
-                "conversation_memory",
-                "session_management",
-                "context_awareness",
-                "brazilian_portuguese_responses",
-            ],
+          }
+        } catch (e) {
+          console.log('⚠️ Erro ao verificar status - iniciando nova sessão');
+          resetChat();
+          return;
         }
-    except Exception as e:
-        logger.error(f"❌ Error checking AI service status: {str(e)}")
-        return {
-            "service": "ai_service",
-            "status": "error",
-            "error": str(e),
-            "configuration_required": True,
-            "api_key_configured": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")),
+      }
+      
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.session_id && !chatState.sessionId) {
+            chatState.sessionId = data.session_id;
+            localStorage.setItem('chat_session_id', data.session_id);
+          }
+          if (data.question) {
+            addMessage(data.question, 'bot');
+          } else if (data.response) {
+            addMessage(data.response, 'bot');
+          }
         }
+      } catch (err) {
+        console.error('❌ Falha ao inicializar conversa:', err);
+      }
+    });
 
-
-# Alias for compatibility
-process_with_langchain = process_chat_message
+    document.getElementById('messageInput').addEventListener('keypress', e => {
+      if (e.key === 'Enter' && !chatState.isCompleted) {
+        sendMessage();
+      }
+    });
+  </script>
+</body>
+</html>
