@@ -1,380 +1,314 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>💬 Chat Advocacia — Escritório X!</title>
-  <style>
-    body {
-      font-family: 'Poppins', sans-serif;
-      margin: 0;
-      padding: 0;
-      height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      background: url('https://imgur.com/FKXnrb1.png') no-repeat center center fixed;
-      background-size: cover;
-    }
-    .chat-container {
-      max-width: 500px;
-      width: 100%;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 15px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      height: 80vh;
-      backdrop-filter: blur(10px);
-      transition: all 0.3s ease;
-    }
-    .chat-header {
-      background: #bd9b68;
-      color: white;
-      padding: 15px;
-      text-align: center;
-      font-size: 20px;
-      font-weight: bold;
-      letter-spacing: 1px;
-      border-bottom: 2px solid ;
-    }
-    .messages {
-      flex: 1;
-      padding: 15px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .message {
-      display: flex;
-      align-items: flex-end;
-      gap: 8px;
-    }
-    .message.user { justify-content: flex-end; }
-    .bubble {
-      padding: 10px 15px;
-      border-radius: 15px;
-      max-width: 70%;
-      font-size: 14px;
-      line-height: 1.4;
-      position: relative;
-    }
-    .user .bubble {
-      background: #492519;
-      color: white;
-      border-bottom-right-radius: 0;
-    }
-    .bot .bubble {
-      background: #4682b4;
-      color: white;
-      border-bottom-left-radius: 0;
-    }
-    .avatar {
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      border: 2px solid white;
-    }
-    .input-area {
-      display: flex;
-      border-top: 2px solid #444;
-      padding: 10px;
-      background: rgba(44, 44, 44, 0.9);
-    }
-    .input-area input {
-      flex: 1;
-      border: none;
-      border-radius: 20px;
-      padding: 12px;
-      font-size: 14px;
-      outline: none;
-      background: #444;
-      color: white;
-    }
-    .input-area input::placeholder { color: #bbb; }
-    .input-area button {
-      margin-left: 8px;
-      background: #ff9800;
-      border: none;
-      border-radius: 20px;
-      padding: 10px 20px;
-      color: white;
-      font-size: 14px;
-      cursor: pointer;
-      transition: 0.2s;
-    }
-    .input-area button:hover { background: #e07d00; }
-    .chat-reset-btn {
-      background: #28a745;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 15px;
-      font-size: 12px;
-      cursor: pointer;
-      margin-left: 10px;
-      transition: 0.2s;
-    }
-    .chat-reset-btn:hover { background: #218838; }
-    .chat-completed {
-      background: rgba(40, 167, 69, 0.1);
-      border: 2px solid #28a745;
-      border-radius: 10px;
-      padding: 15px;
-      margin: 10px 0;
-      text-align: center;
-    }
-    @media (max-width: 600px) {
-      .chat-container { width: 90%; height: 70vh; border-radius: 20px; margin: auto; }
-      .chat-header { font-size: 16px; padding: 10px; }
-      .bubble { font-size: 13px; max-width: 80%; }
-      .input-area input { font-size: 13px; padding: 10px; }
-      .input-area button { padding: 8px 16px; font-size: 13px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="chat-container">
-    <div class="chat-header">💬 Chat Advocacia — Escritório X!</div>
-    <div id="messages" class="messages">
-      <div class="message bot">
-        <div class="bubble">Carregando...</div>
-        <img src="https://imgur.com/z9lvA3Z.png" class="avatar" alt="Bot">
-        <div class="bubble"> Bem-vindo ao escritório, pronto para conversar?</div>
-      </div>
-    </div>
-    <div class="input-area">
-      <input id="messageInput" type="text" placeholder="Digite sua mensagem... ⚖️">
-      <button onclick="sendMessage()">Enviar</button>
-      <button id="resetBtn" class="chat-reset-btn" onclick="resetChat()" style="display: none;">Nova Conversa</button>
-    </div>
-  </div>
+"""
+Conversation Routes
 
-  <script>
-    // 🔗 URL do backend
-    const API_BASE_URL = 'https://law-firm-backend-936902782519-936902782519.us-central1.run.app';
+Routes for handling conversation flow and chat interactions.
+These routes manage the guided conversation flow for lead qualification.
+"""
+
+import logging
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import JSONResponse
+
+from app.models.request import ConversationRequest
+from app.services.orchestration_service import intelligent_orchestrator
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Create router
+router = APIRouter()
+
+
+@router.post("/conversation/start")
+async def start_conversation(session_id: Optional[str] = None):
+    """
+    ✅ INICIAR CONVERSA COM SAUDAÇÃO PERSONALIZADA POR HORÁRIO
     
-    // 🎯 Estado do chat
-    let chatState = {
-      sessionId: null,
-      isCompleted: false,
-      messageCount: 0,
-      hasStarted: false
-    };
-
-    // 🔄 Função para resetar o chat
-    function resetChat() {
-      console.log('🔄 Resetando chat...');
-      
-      // Limpar estado
-      chatState = {
-        sessionId: null,
-        isCompleted: false,
-        messageCount: 0,
-        hasStarted: false
-      };
-      
-      // Limpar localStorage
-      localStorage.removeItem('chat_session_id');
-      
-      // Limpar mensagens
-      const messagesDiv = document.getElementById('messages');
-      messagesDiv.innerHTML = `
-        <div class="message bot">
-          <img src="https://imgur.com/z9lvA3Z.png" class="avatar" alt="Bot">
-          <div class="bubble">Carregando...</div>
-        </div>
-      `;
-      
-      // Reabilitar input
-      const input = document.getElementById('messageInput');
-      const sendBtn = document.querySelector('button[onclick="sendMessage()"]');
-      
-      input.disabled = false;
-      input.placeholder = "Digite sua mensagem... ⚖️";
-      sendBtn.disabled = false;
-      
-      // Inicializar conversa automaticamente
-      setTimeout(() => initializeChat(), 500);
-      
-      console.log('✅ Chat resetado com sucesso');
-    }
+    Inicia uma nova conversa com saudação baseada no horário:
+    - Bom dia (5h-12h)
+    - Boa tarde (12h-18h) 
+    - Boa noite (18h-5h)
     
-    // 🎯 Função para inicializar chat com saudação personalizada
-    async function initializeChat() {
-      try {
-        console.log('🚀 Inicializando chat com saudação personalizada...');
+    Seguido da pergunta do nome completo.
+    """
+    try:
+        logger.info("🚀 Iniciando nova conversa com saudação personalizada")
         
-        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          
-          // Atualizar primeira mensagem com saudação personalizada
-          const firstMessage = document.querySelector('.message.bot .bubble');
-          if (firstMessage) {
-            firstMessage.textContent = data.response || data.question || "Olá! Como posso ajudá-lo?";
-          }
-          
-          if (data.session_id) {
-            chatState.sessionId = data.session_id;
-            localStorage.setItem('chat_session_id', data.session_id);
-          }
-          
-          chatState.hasStarted = true;
-          console.log('✅ Chat inicializado com sucesso');
-        } else {
-          console.error('❌ Erro ao inicializar chat');
-          const firstMessage = document.querySelector('.message.bot .bubble');
-          if (firstMessage) {
-            firstMessage.textContent = "Olá! Como posso ajudá-lo hoje?";
-          }
-        }
-      } catch (err) {
-        console.error('❌ Erro na inicialização:', err);
-        const firstMessage = document.querySelector('.message.bot .bubble');
-        if (firstMessage) {
-          firstMessage.textContent = "Olá! Como posso ajudá-lo hoje?";
-        }
-      }
-    }
-
-    function addMessage(text, sender = 'user') {
-      const messagesDiv = document.getElementById('messages');
-      const messageDiv = document.createElement('div');
-      messageDiv.className = `message ${sender}`;
-
-      const avatar = document.createElement('img');
-      avatar.className = 'avatar';
-      avatar.src = sender === 'user' 
-        ? 'https://imgur.com/P9aCUJC.png'
-        : 'https://imgur.com/z9lvA3Z.png';
-      avatar.alt = sender;
-
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.textContent = text;
-
-      if (sender === 'user') {
-        messageDiv.appendChild(bubble);
-        messageDiv.appendChild(avatar);
-      } else {
-        messageDiv.appendChild(avatar);
-        messageDiv.appendChild(bubble);
-      }
-
-      messagesDiv.appendChild(messageDiv);
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
-      
-      chatState.messageCount++;
-    }
-
-    async function sendMessage() {
-      const input = document.getElementById('messageInput');
-      const text = input.value.trim();
-      if (!text) return;
-      
-      addMessage(text, 'user');
-      input.value = '';
-      
-        console.log('🆕 Nova sessão criada:', chatState.sessionId);
-      }
-
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/respond`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            message: text, 
-            session_id: chatState.sessionId
-          })
-        });
-
-        if (!response.ok) throw new Error('Erro na API');
-        const data = await response.json();
-
-        // Atualizar sessionId se retornado
-        if (data.session_id && data.session_id !== chatState.sessionId) {
-          chatState.sessionId = data.session_id;
-          localStorage.setItem('chat_session_id', data.session_id);
-        }
-
-        const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
-        addMessage(botMessage, 'bot');
+        # ✅ USAR ORCHESTRATOR PARA SAUDAÇÃO PERSONALIZADA
+        result = await intelligent_orchestrator.start_conversation(session_id)
         
-        // Verificar se conversa foi finalizada
-        if (data.flow_completed || data.lawyers_notified || 
-            (data.response && data.response.includes('Nossa equipe entrará em contato'))) {
-          console.log('🎯 Conversa finalizada detectada');
-          setTimeout(() => markChatCompleted(), 1000);
-        }
-
-      } catch (err) {
-        console.error('API Error:', err);
-        addMessage("⚠️ Erro de conexão com o backend.", 'bot');
-      }
-    }
-
-    window.addEventListener('load', async () => {
-      console.log('🚀 Inicializando chat...');
-      
-      // Verificar se há sessão salva
-      const savedSessionId = localStorage.getItem('chat_session_id');
-      if (savedSessionId) {
-        console.log('📋 Sessão encontrada:', savedSessionId);
-        chatState.sessionId = savedSessionId;
+        logger.info(f"✅ Conversa iniciada: {result.get('session_id')}")
+        logger.info(f"💬 Saudação: {result.get('response', '')[:50]}...")
         
-        // Verificar status da sessão
-        try {
-          const statusResponse = await fetch(`${API_BASE_URL}/api/v1/conversation/status/${savedSessionId}`);
-          if (statusResponse.ok) {
-            const statusData = await statusResponse.json();
-            if (statusData.status_info && statusData.status_info.flow_completed) {
-              console.log('📋 Sessão anterior finalizada - permitindo nova conversa');
-              resetChat();
-              return;
+        return JSONResponse(
+            content=result,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
             }
-          }
-        } catch (e) {
-          console.log('⚠️ Erro ao verificar status - iniciando nova sessão');
-          resetChat();
-          return;
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao iniciar conversa: {str(e)}")
+        logger.error(f"❌ Stack trace:", exc_info=True)
+        
+        # ✅ FALLBACK COM LEAD_DATA VÁLIDO
+        fallback_response = {
+            "session_id": f"error_{hash(str(e)) % 10000}",
+            "response": "Olá! Como posso ajudá-lo hoje?",
+            "response_type": "error_fallback",
+            "error": str(e),
+            "lead_data": {}  # ✅ SEMPRE RETORNAR LEAD_DATA VÁLIDO
         }
-      }
-      
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
+        
+        return JSONResponse(
+            content=fallback_response,
+            status_code=200,  # Não retornar 500 para não quebrar frontend
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
 
-        if (response.ok) {
-          const data = await response.json();
-          if (data.session_id && !chatState.sessionId) {
-            chatState.sessionId = data.session_id;
-            localStorage.setItem('chat_session_id', data.session_id);
-          }
-          if (data.question) {
-            addMessage(data.question, 'bot');
-          } else if (data.response) {
-            addMessage(data.response, 'bot');
-          }
+
+@router.post("/conversation/respond")
+async def respond_to_conversation(request: ConversationRequest):
+    """
+    ✅ PROCESSAR RESPOSTA COM VALIDAÇÃO RIGOROSA DE LEAD_DATA
+    
+    Processa resposta do usuário com:
+    - Validação rigorosa de lead_data
+    - Correção automática de sessões antigas
+    - Fallback seguro em caso de erro
+    - Sempre retorna lead_data válido
+    """
+    try:
+        logger.info(f"📨 Processando resposta: {request.message[:50]}...")
+        logger.info(f"🆔 Session ID: {request.session_id}")
+        
+        # ✅ PROCESSAR VIA ORCHESTRATOR COM VALIDAÇÃO RIGOROSA
+        result = await intelligent_orchestrator.process_message(
+            message=request.message,
+            session_id=request.session_id or f"web_{hash(request.message) % 10000}",
+            platform="web"
+        )
+        
+        # ✅ GARANTIR LEAD_DATA SEMPRE PRESENTE
+        if "lead_data" not in result:
+            result["lead_data"] = {}
+            logger.warning("⚠️ lead_data ausente no resultado, adicionado automaticamente")
+        
+        logger.info(f"✅ Resposta processada: {result.get('response_type', 'unknown')}")
+        logger.info(f"📊 Lead data presente: {bool(result.get('lead_data'))}")
+        
+        return JSONResponse(
+            content=result,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao processar resposta: {str(e)}")
+        logger.error(f"❌ Request data: message='{request.message}', session_id='{request.session_id}'")
+        logger.error(f"❌ Stack trace:", exc_info=True)
+        
+        # ✅ FALLBACK SEGURO COM LEAD_DATA VÁLIDO
+        error_response = {
+            "session_id": request.session_id or f"error_{hash(str(e)) % 10000}",
+            "response": "Desculpe, ocorreu um erro temporário. Vamos tentar novamente?",
+            "response_type": "system_error_recovery",
+            "error": str(e),
+            "lead_data": {},  # ✅ SEMPRE RETORNAR LEAD_DATA VÁLIDO
+            "step": 1,
+            "flow_completed": False,
+            "ai_mode": False
         }
-      } catch (err) {
-        console.error('❌ Falha ao inicializar conversa:', err);
-      }
-    });
+        
+        return JSONResponse(
+            content=error_response,
+            status_code=200,  # ✅ NÃO RETORNAR 500 PARA NÃO QUEBRAR FRONTEND
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
 
-    document.getElementById('messageInput').addEventListener('keypress', e => {
-      if (e.key === 'Enter' && !chatState.isCompleted) {
-        sendMessage();
-      }
-    });
-  </script>
-</body>
-</html>
+
+@router.get("/conversation/status/{session_id}")
+async def get_conversation_status(session_id: str):
+    """
+    ✅ OBTER STATUS DA CONVERSA COM VALIDAÇÃO DE LEAD_DATA
+    
+    Retorna status completo da conversa com:
+    - Validação de integridade da sessão
+    - lead_data sempre presente
+    - Correção automática de sessões antigas
+    """
+    try:
+        logger.info(f"📊 Obtendo status da conversa: {session_id}")
+        
+        # ✅ OBTER CONTEXTO VIA ORCHESTRATOR
+        context = await intelligent_orchestrator.get_session_context(session_id)
+        
+        # ✅ GARANTIR LEAD_DATA SEMPRE PRESENTE
+        if "lead_data" not in context:
+            context["lead_data"] = {}
+            logger.warning("⚠️ lead_data ausente no contexto, adicionado automaticamente")
+        
+        logger.info(f"✅ Status obtido: {context.get('current_step', 'unknown')}")
+        
+        return JSONResponse(
+            content=context,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao obter status: {str(e)}")
+        logger.error(f"❌ Stack trace:", exc_info=True)
+        
+        # ✅ FALLBACK SEGURO
+        error_context = {
+            "session_id": session_id,
+            "error": str(e),
+            "status_info": {
+                "step": 1,
+                "flow_completed": False,
+                "phone_submitted": False,
+                "state": "error"
+            },
+            "lead_data": {},  # ✅ SEMPRE RETORNAR LEAD_DATA VÁLIDO
+            "current_step": 1,
+            "flow_completed": False,
+            "phone_submitted": False
+        }
+        
+        return JSONResponse(
+            content=error_context,
+            status_code=200,  # ✅ NÃO RETORNAR 500
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
+
+
+@router.get("/conversation/flow")
+async def get_conversation_flow():
+    """
+    ✅ OBTER FLUXO DE CONVERSA
+    
+    Retorna o fluxo de conversa configurado no Firebase.
+    """
+    try:
+        from app.services.firebase_service import get_conversation_flow
+        
+        logger.info("📋 Obtendo fluxo de conversa")
+        
+        flow = await get_conversation_flow()
+        
+        logger.info(f"✅ Fluxo obtido: {len(flow.get('steps', []))} steps")
+        
+        return JSONResponse(
+            content=flow,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao obter fluxo: {str(e)}")
+        
+        # ✅ FALLBACK COM FLUXO BÁSICO
+        fallback_flow = {
+            "steps": [
+                {"id": 1, "question": "Qual é o seu nome completo?"},
+                {"id": 2, "question": "Qual o seu telefone e e-mail?"},
+                {"id": 3, "question": "Em qual área você precisa de ajuda?"},
+                {"id": 4, "question": "Descreva sua situação:"},
+                {"id": 5, "question": "Posso direcioná-lo para nosso especialista?"}
+            ],
+            "completion_message": "Obrigado! Nossa equipe entrará em contato.",
+            "error": str(e)
+        }
+        
+        return JSONResponse(
+            content=fallback_flow,
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
+
+
+@router.post("/conversation/reset-session/{session_id}")
+async def reset_session(session_id: str):
+    """
+    ✅ RESETAR SESSÃO COMPLETAMENTE
+    
+    Limpa sessão e permite nova conversa.
+    Remove o problema de "finalizado" permanente.
+    """
+    try:
+        logger.info(f"🔄 Resetando sessão: {session_id}")
+        
+        # ✅ CRIAR NOVA SESSÃO LIMPA
+        result = await intelligent_orchestrator.start_conversation(session_id)
+        
+        logger.info(f"✅ Sessão resetada: {session_id}")
+        
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": "Sessão resetada com sucesso",
+                "session_id": session_id,
+                "new_conversation": result
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao resetar sessão: {str(e)}")
+        
+        return JSONResponse(
+            content={
+                "success": False,
+                "error": str(e),
+                "session_id": session_id
+            },
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            }
+        )
