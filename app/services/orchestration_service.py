@@ -785,23 +785,40 @@ Nossa equipe entrará em contato em alguns minutos."""
                 except Exception as save_error:
                     logger.error(f"❌ Erro ao salvar lead: {str(save_error)}")
 
-                # Enviar WhatsApp estratégico
+                # 📱 ENVIAR WHATSAPP ESTRATÉGICO
                 area = lead_data.get("area_qualification", "direito")
-                strategic_message = self._get_strategic_whatsapp_message(user_name, area, phone_formatted)
+                
+                # ✅ MENSAGEM DIFERENTE POR PLATAFORMA
+                if platform == "web":
+                    # Chat da Landing - mensagem simples
+                    whatsapp_message = f"""Olá {first_name}! 👋
+
+Suas informações foram registradas no m.lima Advogados.
+
+Nossa equipe especializada em {area} entrará em contato com você em breve para dar prosseguimento ao seu caso.
+
+Obrigado pela confiança! 🤝"""
+                else:
+                    # WhatsApp - mensagem estratégica completa
+                    whatsapp_message = self._get_strategic_whatsapp_message(user_name, area, phone_formatted)
                 
                 whatsapp_success = False
                 
                 try:
-                    # ✅ CORREÇÃO: Passar apenas phone_clean (sem @s.whatsapp.net)
-                    whatsapp_success = await baileys_service.send_whatsapp_message(phone_clean, strategic_message)
+                    # ✅ CORREÇÃO: Passar apenas número limpo (sem @s.whatsapp.net)
+                    whatsapp_success = await baileys_service.send_whatsapp_message(phone_formatted, whatsapp_message)
+                    
                     if whatsapp_success:
-                        logger.info(f"📱 WhatsApp estratégico enviado com sucesso para {phone_clean}")
+                        logger.info(f"✅ WhatsApp enviado com sucesso para {phone_formatted}")
                     else:
-                        logger.error(f"❌ Falha no envio do WhatsApp estratégico para {phone_clean}")
+                        logger.error(f"❌ Falha no envio WhatsApp para {phone_formatted}")
+                        
                 except Exception as whatsapp_error:
-                    logger.error(f"❌ Erro ao enviar WhatsApp estratégico: {str(whatsapp_error)}")
+                    logger.error(f"❌ EXCEÇÃO ao enviar WhatsApp: {str(whatsapp_error)}")
+                    import traceback
+                    logger.error(f"   Traceback: {traceback.format_exc()}")
 
-                # Mensagem final personalizada
+                # 🎯 MENSAGEM FINAL PERSONALIZADA
                 notification_status = ""
                 if notification_result.get("notified") and notification_result.get("success"):
                     notification_status = " ⚡ Nossa equipe foi imediatamente notificada!"
@@ -810,7 +827,7 @@ Nossa equipe entrará em contato em alguns minutos."""
 
 Todas suas informações foram registradas com sucesso{notification_status}
 
-Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso com toda atenção necessária.
+{'🎯 CHAT DA LANDING: ' if platform == 'web' else ''}Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso com toda atenção necessária.
 
 {'📱 Mensagem de confirmação enviada no seu WhatsApp!' if whatsapp_success else '📝 Suas informações foram salvas com segurança.'}
 
@@ -822,115 +839,6 @@ Em alguns minutos, um especialista entrará em contato."""
             
         except Exception as e:
             logger.error(f"❌ Erro na finalização do lead: {str(e)}")
-            user_name = session_data.get("lead_data", {}).get("identification", "")
-            first_name = user_name.split()[0] if user_name else ""
-            return f"Obrigado pelas informações, {first_name}! Nossa equipe entrará em contato em breve. 😊"
-
-                # ✅ MENSAGEM FINAL SIMPLES - SEM WHATSAPP
-                notification_status = ""
-                if notification_result.get("notified") and notification_result.get("success"):
-                    notification_status = " ⚡ Nossa equipe foi imediatamente notificada!"
-                
-                final_message = f"""Perfeito, {first_name}! ✅
-
-Todas suas informações foram registradas com sucesso{notification_status}
-
-Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso com toda atenção necessária.
-
-Você fez a escolha certa ao confiar no escritório m.lima! 🤝
-
-Nossa equipe entrará em contato em alguns minutos."""
-
-                return final_message
-            
-            # ✅ WHATSAPP - FINALIZAÇÃO COM MENSAGEM ESTRATÉGICA
-            else:
-                # Extrair telefone
-                phone_clean = lead_data.get("phone", "")
-                if not phone_clean:
-                    contact_info = lead_data.get("contact_info", "")
-                    phone_match = re.search(r'(\d{10,11})', contact_info or "")
-                    phone_clean = phone_match.group(1) if phone_match else ""
-                    
-                if not phone_clean or len(phone_clean) < 10:
-                    return f"Para finalizar, {first_name}, preciso do seu WhatsApp com DDD (ex: 11999999999):"
-
-                # Formatar telefone
-                phone_formatted = self._format_brazilian_phone(phone_clean)
-                
-                # Atualizar dados da sessão
-                session_data.update({
-                    "phone_number": phone_clean,
-                    "phone_formatted": phone_formatted,
-                    "phone_submitted": True,
-                    "lead_qualified": True,
-                    "last_updated": ensure_utc(datetime.now(timezone.utc))
-                })
-                
-                await save_user_session(session_id, session_data)
-
-                # Notificar advogados se ainda não foram notificados
-                notification_result = await self.notify_lawyers_if_qualified(session_id, session_data, platform)
-                
-                # Salvar lead data
-                try:
-                    answers = []
-                    field_mapping = {
-                        "identification": {"id": 1, "answer": lead_data.get("identification", "")},
-                        "contact_info": {"id": 2, "answer": lead_data.get("contact_info", "")},
-                        "area_qualification": {"id": 3, "answer": lead_data.get("area_qualification", "")},
-                        "case_details": {"id": 4, "answer": lead_data.get("case_details", "")},
-                        "confirmation": {"id": 5, "answer": lead_data.get("confirmation", "")}
-                    }
-                    
-                    for field, data in field_mapping.items():
-                        if data["answer"]:
-                            answers.append(data)
-                    
-                    if phone_clean:
-                        answers.append({"id": 99, "field": "phone_extracted", "answer": phone_clean})
-
-                    lead_id = await save_lead_data({"answers": answers})
-                    logger.info(f"Lead saved with ID: {lead_id}")
-                        
-                except Exception as save_error:
-                    logger.error(f"Error saving lead: {str(save_error)}")
-
-                # Enviar WhatsApp estratégico
-                area = lead_data.get("area_qualification", "direito")
-                strategic_message = self._get_strategic_whatsapp_message(user_name, area, phone_formatted)
-                
-                whatsapp_number = f"{phone_formatted}@s.whatsapp.net"
-                whatsapp_success = False
-                
-                try:
-                    await baileys_service.send_whatsapp_message(whatsapp_number, strategic_message)
-                    logger.info(f"📱 WhatsApp estratégico enviado com sucesso para {phone_formatted}")
-                    whatsapp_success = True
-                except Exception as whatsapp_error:
-                    logger.error(f"❌ Erro ao enviar WhatsApp estratégico: {str(whatsapp_error)}")
-
-                # Mensagem final personalizada
-                notification_status = ""
-                if notification_result.get("notified") and notification_result.get("success"):
-                    notification_status = " ⚡ Nossa equipe foi imediatamente notificada!"
-                
-                final_message = f"""Perfeito, {first_name}! ✅
-
-Todas suas informações foram registradas com sucesso{notification_status}
-
-Um advogado experiente do m.lima entrará em contato com você em breve para dar prosseguimento ao seu caso com toda atenção necessária.
-
-{'📱 Mensagem de confirmação enviada no seu WhatsApp!' if whatsapp_success else '📝 Suas informações foram salvas com segurança.'}
-
-Você fez a escolha certa ao confiar no escritório m.lima para cuidar do seu caso! 🤝
-
-Em alguns minutos, um especialista entrará em contato."""
-
-                return final_message
-            
-        except Exception as e:
-            logger.error(f"Error in lead finalization: {str(e)}")
             user_name = session_data.get("lead_data", {}).get("identification", "")
             first_name = user_name.split()[0] if user_name else ""
             return f"Obrigado pelas informações, {first_name}! Nossa equipe entrará em contato em breve. 😊"

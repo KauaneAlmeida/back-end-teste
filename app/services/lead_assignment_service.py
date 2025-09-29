@@ -385,13 +385,13 @@ Situação: {situation[:200]}{'...' if len(situation) > 200 else ''}
                     continue
                 
                 try:
-                    # ✅ CORREÇÃO: Extrair apenas o número limpo
-                    clean_phone_for_vm = ''.join(filter(str.isdigit, lawyer["phone"]))
-                    if not clean_phone_for_vm.startswith("55"):
-                        clean_phone_for_vm = f"55{clean_phone_for_vm}"
+                    # ✅ LIMPEZA DO NÚMERO
+                    lawyer_phone_clean = ''.join(filter(str.isdigit, lawyer["phone"]))
+                    if not lawyer_phone_clean.startswith("55"):
+                        lawyer_phone_clean = f"55{lawyer_phone_clean}"
                     
                     await baileys_service.send_whatsapp_message(
-                        clean_phone_for_vm,  # ✅ Apenas número limpo
+                        lawyer_phone_clean,  # ✅ Apenas número limpo
                         notification_message
                     )
                     logger.info(f"📢 Notified {lawyer['name']} that case was taken")

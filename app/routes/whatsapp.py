@@ -434,19 +434,27 @@ async def send_whatsapp_message(request: dict):
         if not phone_number or not message:
             raise HTTPException(status_code=400, detail="Missing phone_number or message")
 
-        # ✅ CORREÇÃO: Limpar número antes de enviar
+        # ✅ LIMPEZA DO NÚMERO
         clean_phone = ''.join(filter(str.isdigit, phone_number))
         if not clean_phone.startswith("55"):
             clean_phone = f"55{clean_phone}"
         
-        logger.info(f"📤 Envio manual WhatsApp para {clean_phone}")
+        logger.info(f"📤 ENVIO MANUAL WHATSAPP")
+        logger.info(f"   Para: {clean_phone}")
+        logger.info(f"   Mensagem: {message[:50]}...")
+        
         success = await baileys_service.send_whatsapp_message(clean_phone, message)
 
         if success:
-            logger.info(f"✅ Mensagem enviada para {clean_phone}")
-            return {"status": "success", "message": "WhatsApp message sent successfully", "to": clean_phone}
+            logger.info(f"✅ MENSAGEM ENVIADA COM SUCESSO para {clean_phone}")
+            return {
+                "status": "success", 
+                "message": "✅ WhatsApp message sent successfully", 
+                "to": clean_phone,
+                "timestamp": datetime.now().isoformat()
+            }
         
-        logger.error(f"❌ Falha ao enviar para {clean_phone}")
+        logger.error(f"❌ FALHA AO ENVIAR para {clean_phone}")
         raise HTTPException(status_code=500, detail="Failed to send WhatsApp message")
 
     except Exception as e:

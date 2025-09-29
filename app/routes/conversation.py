@@ -301,25 +301,44 @@ async def conversation_service_status():
 @router.post("/conversation/reset-session/{session_id}")
 async def reset_conversation_session(session_id: str):
     """
-    Reset a conversation session - UNIFIED through orchestrator
+    Reset a conversation session - permite nova conversa
     """
     try:
-        logger.info(f"🔄 Resetting session: {session_id}")
+        logger.info(f"🔄 RESETANDO SESSÃO: {session_id}")
         
-        # Use Firebase reset function if available
+        # ✅ RESET COMPLETO DA SESSÃO
         from app.services.firebase_service import reset_user_session
         try:
-            result = await reset_user_session(session_id)
-        except:
-            # Fallback to manual reset
-            result = True
+            # Criar nova sessão limpa
+            clean_session = {
+                "session_id": session_id,
+                "platform": "whatsapp" if session_id.startswith("whatsapp_") else "web",
+                "created_at": datetime.now(timezone.utc),
+                "current_step": "step1_name",
+                "lead_data": {},
+                "message_count": 0,
+                "flow_completed": False,
+                "phone_submitted": False,
+                "lawyers_notified": False,
+                "last_updated": datetime.now(timezone.utc),
+                "first_interaction": True,
+                "reset_at": datetime.now(timezone.utc),
+                "reset_count": 1
+            }
+            
+            result = await save_user_session(session_id, clean_session)
+            logger.info(f"✅ Sessão {session_id} resetada com sucesso")
+            
+        except Exception as reset_error:
+            logger.error(f"❌ Erro ao resetar sessão: {str(reset_error)}")
+            result = False
         
         return {
-            "status": "success",
-            "message": f"Session {session_id} reset successfully",
+            "status": "success" if result else "error",
+            "message": f"✅ Sessão {session_id} resetada - pronta para nova conversa" if result else "❌ Erro ao resetar sessão",
             "session_id": session_id,
-            "result": result,
-            "approach": "unified_orchestrator",
+            "reset_successful": result,
+            "new_conversation_ready": result,
             "timestamp": datetime.now().isoformat()
         }
         
