@@ -106,6 +106,26 @@
       transition: 0.2s;
     }
     .input-area button:hover { background: #e07d00; }
+    .chat-reset-btn {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 15px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: 10px;
+      transition: 0.2s;
+    }
+    .chat-reset-btn:hover { background: #218838; }
+    .chat-completed {
+      background: rgba(40, 167, 69, 0.1);
+      border: 2px solid #28a745;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 10px 0;
+      text-align: center;
+    }
     @media (max-width: 600px) {
       .chat-container { width: 90%; height: 70vh; border-radius: 20px; margin: auto; }
       .chat-header { font-size: 16px; padding: 10px; }
@@ -127,12 +147,83 @@
     <div class="input-area">
       <input id="messageInput" type="text" placeholder="Digite sua mensagem... ⚖️">
       <button onclick="sendMessage()">Enviar</button>
+      <button id="resetBtn" class="chat-reset-btn" onclick="resetChat()" style="display: none;">Nova Conversa</button>
     </div>
   </div>
 
   <script>
-    // 🔗 Definindo URL fixa do backend no Render
+    // 🔗 URL do backend
+    const API_BASE_URL = 'https://law-firm-backend-936902782519-936902782519.us-central1.run.app';
+    
+    // 🎯 Estado do chat
+    let chatState = {
+      sessionId: null,
+      isCompleted: false,
+      messageCount: 0
+    };
 
+    // 🔄 Função para resetar o chat
+    function resetChat() {
+      console.log('🔄 Resetando chat...');
+      
+      // Limpar estado
+      chatState = {
+        sessionId: null,
+        isCompleted: false,
+        messageCount: 0
+      };
+      
+      // Limpar localStorage
+      localStorage.removeItem('chat_session_id');
+      
+      // Limpar mensagens
+      const messagesDiv = document.getElementById('messages');
+      messagesDiv.innerHTML = `
+        <div class="message bot">
+          <img src="https://imgur.com/z9lvA3Z.png" class="avatar" alt="Bot">
+          <div class="bubble">Bem-vindo ao escritório, pronto para conversar?</div>
+        </div>
+      `;
+      
+      // Reabilitar input
+      const input = document.getElementById('messageInput');
+      const sendBtn = document.querySelector('button[onclick="sendMessage()"]');
+      const resetBtn = document.getElementById('resetBtn');
+      
+      input.disabled = false;
+      input.placeholder = "Digite sua mensagem... ⚖️";
+      sendBtn.disabled = false;
+      resetBtn.style.display = 'none';
+      
+      console.log('✅ Chat resetado com sucesso');
+    }
+    
+    // 🎯 Função para marcar chat como finalizado
+    function markChatCompleted() {
+      chatState.isCompleted = true;
+      
+      // Mostrar mensagem de finalização
+      const messagesDiv = document.getElementById('messages');
+      const completedDiv = document.createElement('div');
+      completedDiv.className = 'chat-completed';
+      completedDiv.innerHTML = `
+        <strong>✅ Atendimento Finalizado</strong><br>
+        <small>Nossa equipe entrará em contato em breve!</small>
+      `;
+      messagesDiv.appendChild(completedDiv);
+      
+      // Desabilitar input temporariamente
+      const input = document.getElementById('messageInput');
+      const sendBtn = document.querySelector('button[onclick="sendMessage()"]');
+      const resetBtn = document.getElementById('resetBtn');
+      
+      input.placeholder = "Conversa finalizada - clique em 'Nova Conversa' para reiniciar";
+      resetBtn.style.display = 'inline-block';
+      
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      
+      console.log('🎉 Chat marcado como finalizado');
+    }
 
     function addMessage(text, sender = 'user') {
       const messagesDiv = document.getElementById('messages');
@@ -160,15 +251,30 @@
 
       messagesDiv.appendChild(messageDiv);
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      
+      chatState.messageCount++;
     }
 
     async function sendMessage() {
       const input = document.getElementById('messageInput');
       const text = input.value.trim();
       if (!text) return;
+      
+      // Verificar se chat está finalizado
+      if (chatState.isCompleted) {
+        console.log('⚠️ Chat finalizado - use Nova Conversa');
+        return;
+      }
 
       addMessage(text, 'user');
       input.value = '';
+      
+      // Usar sessionId do estado ou gerar novo
+      if (!chatState.sessionId) {
+        chatState.sessionId = 'web_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('chat_session_id', chatState.sessionId);
+        console.log('🆕 Nova sessão criada:', chatState.sessionId);
+      }
 
       try {
         const response = await fetch(`${API_BASE_URL}/api/v1/conversation/respond`, {
@@ -176,19 +282,28 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             message: text, 
-            session_id: localStorage.getItem('chat_session_id') || 'web_' + Date.now()
+            session_id: chatState.sessionId
           })
         });
 
         if (!response.ok) throw new Error('Erro na API');
         const data = await response.json();
 
-        if (data.session_id) {
+        // Atualizar sessionId se retornado
+        if (data.session_id && data.session_id !== chatState.sessionId) {
+          chatState.sessionId = data.session_id;
           localStorage.setItem('chat_session_id', data.session_id);
         }
 
         const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
         addMessage(botMessage, 'bot');
+        
+        // Verificar se conversa foi finalizada
+        if (data.flow_completed || data.lawyers_notified || 
+            (data.response && data.response.includes('Nossa equipe entrará em contato'))) {
+          console.log('🎯 Conversa finalizada detectada');
+          setTimeout(() => markChatCompleted(), 1000);
+        }
 
       } catch (err) {
         console.error('API Error:', err);
@@ -197,6 +312,32 @@
     }
 
     window.addEventListener('load', async () => {
+      console.log('🚀 Inicializando chat...');
+      
+      // Verificar se há sessão salva
+      const savedSessionId = localStorage.getItem('chat_session_id');
+      if (savedSessionId) {
+        console.log('📋 Sessão encontrada:', savedSessionId);
+        chatState.sessionId = savedSessionId;
+        
+        // Verificar status da sessão
+        try {
+          const statusResponse = await fetch(`${API_BASE_URL}/api/v1/conversation/status/${savedSessionId}`);
+          if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            if (statusData.status_info && statusData.status_info.flow_completed) {
+              console.log('📋 Sessão anterior finalizada - permitindo nova conversa');
+              resetChat();
+              return;
+            }
+          }
+        } catch (e) {
+          console.log('⚠️ Erro ao verificar status - iniciando nova sessão');
+          resetChat();
+          return;
+        }
+      }
+      
       try {
         const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
           method: 'POST',
@@ -205,20 +346,25 @@
 
         if (response.ok) {
           const data = await response.json();
-          if (data.session_id) {
+          if (data.session_id && !chatState.sessionId) {
+            chatState.sessionId = data.session_id;
             localStorage.setItem('chat_session_id', data.session_id);
           }
           if (data.question) {
             addMessage(data.question, 'bot');
+          } else if (data.response) {
+            addMessage(data.response, 'bot');
           }
         }
       } catch (err) {
-        console.error('Failed to initialize conversation:', err);
+        console.error('❌ Falha ao inicializar conversa:', err);
       }
     });
 
     document.getElementById('messageInput').addEventListener('keypress', e => {
-      if (e.key === 'Enter') sendMessage();
+      if (e.key === 'Enter' && !chatState.isCompleted) {
+        sendMessage();
+      }
     });
   </script>
 </body>
