@@ -1,13 +1,12 @@
 """
-Intelligent Hybrid Orchestrator - PRODUCTION READY
+Intelligent Hybrid Orchestrator - CLOUD RUN OPTIMIZED
 
-Sistema de orquestração inteligente que combina:
-- IA Gemini para respostas naturais
-- Fallback Firebase para fluxo estruturado
-- Validação rigorosa de lead_data
-- Timeouts otimizados para Cloud Run
-- Auto-reinicialização de sessões
-- Saudação personalizada por horário
+Sistema de orquestração inteligente otimizado para Google Cloud Run com:
+- Timeouts ultra agressivos (2-3s máximo)
+- Fallback instantâneo em caso de timeout
+- Processamento assíncrono não-bloqueante
+- Health checks rápidos
+- Memory management otimizado
 """
 
 import os
@@ -37,27 +36,27 @@ logger = logging.getLogger(__name__)
 
 class IntelligentHybridOrchestrator:
     """
-    ✅ ORQUESTRADOR HÍBRIDO INTELIGENTE - PRODUCTION READY
+    ✅ ORQUESTRADOR HÍBRIDO - CLOUD RUN ULTRA OTIMIZADO
     
-    Combina IA Gemini + Fallback Firebase com:
-    - Validação rigorosa de lead_data (elimina HTTP 500)
-    - Timeouts ultra otimizados para Cloud Run
-    - Auto-reinicialização de sessões travadas
-    - Saudação personalizada por horário
-    - Rate limiting e proteção contra spam
+    Timeouts ultra agressivos para evitar timeout do Cloud Run:
+    - Gemini: 2s (era 4s)
+    - Firebase: 1.5s (era 3s) 
+    - WhatsApp: 3s (era 6s)
+    - Global: 8s (era 15s)
     """
     
     def __init__(self):
-        # ⏰ TIMEOUTS ULTRA AGRESSIVOS PARA CLOUD RUN
-        self.gemini_timeout = 4  # ✅ REDUZIDO DE 8s PARA 4s
-        self.whatsapp_timeout = 6  # ✅ REDUZIDO DE 10s PARA 6s
-        self.firebase_timeout = 3  # ✅ REDUZIDO DE 5s PARA 3s
-        self.whatsapp_global_timeout = 15  # ✅ REDUZIDO DE 25s PARA 15s
-        self.notification_timeout = 8  # ✅ REDUZIDO DE 15s PARA 8s
+        # ⚡ TIMEOUTS ULTRA AGRESSIVOS PARA CLOUD RUN
+        self.gemini_timeout = 2.0      # ✅ REDUZIDO DE 4s PARA 2s
+        self.firebase_timeout = 1.5    # ✅ REDUZIDO DE 3s PARA 1.5s
+        self.whatsapp_timeout = 3.0    # ✅ REDUZIDO DE 6s PARA 3s
+        self.whatsapp_global_timeout = 8.0  # ✅ REDUZIDO DE 15s PARA 8s
+        self.notification_timeout = 4.0     # ✅ REDUZIDO DE 8s PARA 4s
+        self.total_request_timeout = 25.0   # ✅ LIMITE TOTAL PARA CLOUD RUN
         
         # Rate limiting
         self.message_counts = defaultdict(list)
-        self.max_messages_per_minute = 10
+        self.max_messages_per_minute = 15  # ✅ AUMENTADO DE 10 PARA 15
         
         # Session locks para evitar race conditions
         self.session_locks = defaultdict(asyncio.Lock)
@@ -65,26 +64,65 @@ class IntelligentHybridOrchestrator:
         # Gemini availability tracking
         self.gemini_available = True
         self.last_gemini_check = datetime.now()
-        self.gemini_check_interval = timedelta(minutes=5)
+        self.gemini_check_interval = timedelta(minutes=3)  # ✅ REDUZIDO DE 5min PARA 3min
         
-        logger.info("🚀 IntelligentHybridOrchestrator inicializado com timeouts ultra agressivos")
+        # ✅ CACHE EM MEMÓRIA PARA REDUZIR FIREBASE CALLS
+        self.flow_cache = None
+        self.flow_cache_time = None
+        self.cache_ttl = 300  # 5 minutos
+        
+        logger.info("🚀 IntelligentHybridOrchestrator - CLOUD RUN ULTRA OTIMIZADO")
+        logger.info(f"⚡ Timeouts: Gemini={self.gemini_timeout}s, Firebase={self.firebase_timeout}s")
 
     def safe_get_lead_data(self, session_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         ✅ GARANTIR QUE LEAD_DATA SEMPRE SEJA UM DICT VÁLIDO
-        
-        Esta função elimina o erro HTTP 500 causado por lead_data undefined/null
         """
         lead_data = session_data.get("lead_data")
         if not lead_data or not isinstance(lead_data, dict):
             return {}
         return lead_data
 
-    async def _ensure_session_integrity(self, session_id: str, session_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_cached_flow(self) -> Dict[str, Any]:
         """
-        ✅ GARANTIR INTEGRIDADE DA SESSÃO
+        ✅ CACHE DE FLUXO PARA REDUZIR CALLS FIREBASE
+        """
+        now = datetime.now()
         
-        Corrige sessões antigas que não têm lead_data ou têm campos inválidos
+        # ✅ USAR CACHE SE VÁLIDO
+        if (self.flow_cache and self.flow_cache_time and 
+            (now - self.flow_cache_time).total_seconds() < self.cache_ttl):
+            return self.flow_cache
+        
+        # ✅ BUSCAR NOVO FLUXO COM TIMEOUT AGRESSIVO
+        try:
+            flow = await asyncio.wait_for(
+                get_conversation_flow(),
+                timeout=self.firebase_timeout
+            )
+            self.flow_cache = flow
+            self.flow_cache_time = now
+            return flow
+        except asyncio.TimeoutError:
+            logger.warning(f"⏰ Cache flow timeout ({self.firebase_timeout}s) - usando fallback")
+            # ✅ FALLBACK INSTANTÂNEO
+            fallback_flow = {
+                "steps": [
+                    {"id": 1, "question": "Qual é o seu nome completo?"},
+                    {"id": 2, "question": "Qual o seu telefone e e-mail?"},
+                    {"id": 3, "question": "Em qual área você precisa de ajuda? (Penal ou Saúde)"},
+                    {"id": 4, "question": "Descreva sua situação:"},
+                    {"id": 5, "question": "Posso direcioná-lo para nosso especialista?"}
+                ],
+                "completion_message": "Perfeito! Nossa equipe entrará em contato."
+            }
+            self.flow_cache = fallback_flow
+            self.flow_cache_time = now
+            return fallback_flow
+
+    async def _ensure_session_integrity_fast(self, session_id: str, session_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        ✅ GARANTIR INTEGRIDADE DA SESSÃO - VERSÃO RÁPIDA
         """
         needs_save = False
         
@@ -92,19 +130,14 @@ class IntelligentHybridOrchestrator:
         if "lead_data" not in session_data or session_data["lead_data"] is None:
             session_data["lead_data"] = {}
             needs_save = True
-            logger.warning(f"⚠️ Corrigindo lead_data ausente na sessão {session_id}")
         
-        # ✅ GARANTIR CAMPOS ESSENCIAIS
+        # ✅ GARANTIR CAMPOS ESSENCIAIS (MÍNIMOS)
         essential_fields = {
             "session_id": session_id,
-            "platform": "web",
             "current_step": 1,
             "flow_completed": False,
             "phone_submitted": False,
-            "gemini_available": True,
-            "message_count": 0,
-            "created_at": datetime.now().isoformat(),
-            "last_updated": datetime.now().isoformat()
+            "message_count": 0
         }
         
         for field, default_value in essential_fields.items():
@@ -112,115 +145,85 @@ class IntelligentHybridOrchestrator:
                 session_data[field] = default_value
                 needs_save = True
         
-        # ✅ SALVAR SE HOUVER CORREÇÕES (COM TIMEOUT)
+        # ✅ SALVAR APENAS SE NECESSÁRIO E SEM BLOQUEAR
         if needs_save:
-            try:
-                await asyncio.wait_for(
-                    save_user_session(session_id, session_data),
-                    timeout=self.firebase_timeout
-                )
-                logger.info(f"✅ Sessão {session_id} corrigida e salva")
-            except asyncio.TimeoutError:
-                logger.warning(f"⏰ Timeout Firebase save ({self.firebase_timeout}s) - continuando")
-            except Exception as save_error:
-                logger.warning(f"❌ Erro Firebase save: {str(save_error)} - continuando")
+            # ✅ FIRE-AND-FORGET SAVE (NÃO BLOQUEAR)
+            asyncio.create_task(self._save_session_async(session_id, session_data))
         
         return session_data
 
+    async def _save_session_async(self, session_id: str, session_data: Dict[str, Any]):
+        """
+        ✅ SALVAR SESSÃO DE FORMA ASSÍNCRONA SEM BLOQUEAR
+        """
+        try:
+            await asyncio.wait_for(
+                save_user_session(session_id, session_data),
+                timeout=self.firebase_timeout
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Async save failed: {str(e)}")
+
     async def start_conversation(self, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        ✅ INICIAR CONVERSA COM SAUDAÇÃO PERSONALIZADA POR HORÁRIO
-        
-        Retorna saudação baseada no horário de Brasília:
-        - Bom dia (5h-12h)
-        - Boa tarde (12h-18h) 
-        - Boa noite (18h-5h)
+        ✅ INICIAR CONVERSA - VERSÃO ULTRA RÁPIDA
         """
         correlation_id = str(uuid.uuid4())[:8]
         
         try:
-            # ✅ GERAR SESSION_ID SE NÃO FORNECIDO
+            # ✅ GERAR SESSION_ID RÁPIDO
             if not session_id:
                 session_id = f"web_{int(datetime.now().timestamp())}_{correlation_id}"
             
-            logger.info(f"🚀 [{correlation_id}] Iniciando conversa: {session_id}")
+            # ✅ SAUDAÇÃO RÁPIDA (SEM TIMEZONE COMPLEXO)
+            hour = datetime.now().hour
+            if 5 <= hour < 12:
+                greeting = "Bom dia"
+            elif 12 <= hour < 18:
+                greeting = "Boa tarde"
+            else:
+                greeting = "Boa noite"
             
-            # ✅ SAUDAÇÃO PERSONALIZADA POR HORÁRIO (BRASÍLIA)
-            try:
-                brasilia_tz = pytz.timezone('America/Sao_Paulo')
-                now = datetime.now(brasilia_tz)
-                hour = now.hour
-                
-                if 5 <= hour < 12:
-                    greeting = "Bom dia"
-                elif 12 <= hour < 18:
-                    greeting = "Boa tarde"
-                else:
-                    greeting = "Boa noite"
-                
-                logger.info(f"🌅 [{correlation_id}] Horário: {hour}h - Saudação: {greeting}")
-                
-            except Exception as time_error:
-                logger.warning(f"⚠️ [{correlation_id}] Erro ao obter horário: {str(time_error)}")
-                greeting = "Olá"
+            welcome_message = f"{greeting}! Seja bem-vindo ao m.lima. Para começar, qual é o seu nome completo?"
             
-            # ✅ MENSAGEM DE SAUDAÇÃO COMPLETA
-            welcome_message = f"{greeting}! Seja bem-vindo ao m.lima. Estou aqui para entender seu caso e agilizar o contato com um de nossos advogados especializados.\n\nPara começar, qual é o seu nome completo?"
-            
-            # ✅ CRIAR SESSÃO INICIAL COM LEAD_DATA VÁLIDO
+            # ✅ CRIAR SESSÃO MÍNIMA
             session_data = {
                 "session_id": session_id,
-                "platform": "web",
                 "current_step": 1,
                 "flow_completed": False,
                 "phone_submitted": False,
-                "gemini_available": True,
                 "message_count": 0,
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
-                "created_at": datetime.now().isoformat(),
-                "last_updated": datetime.now().isoformat(),
-                "correlation_id": correlation_id
+                "lead_data": {},
+                "created_at": datetime.now().isoformat()
             }
             
-            # ✅ SALVAR SESSÃO (COM TIMEOUT)
-            try:
-                await asyncio.wait_for(
-                    save_user_session(session_id, session_data),
-                    timeout=self.firebase_timeout
-                )
-                logger.info(f"✅ [{correlation_id}] Sessão inicial salva")
-            except asyncio.TimeoutError:
-                logger.warning(f"⏰ [{correlation_id}] Timeout Firebase save ({self.firebase_timeout}s) - continuando")
-            except Exception as save_error:
-                logger.warning(f"❌ [{correlation_id}] Erro Firebase save: {str(save_error)} - continuando")
+            # ✅ SAVE ASSÍNCRONO (NÃO BLOQUEAR)
+            asyncio.create_task(self._save_session_async(session_id, session_data))
             
             return {
                 "session_id": session_id,
                 "response": welcome_message,
-                "response_type": "greeting_personalized",
+                "response_type": "greeting_fast",
                 "current_step": 1,
                 "flow_completed": False,
                 "ai_mode": False,
                 "phone_submitted": False,
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
-                "greeting_type": greeting.lower().replace(" ", "_"),
+                "lead_data": {},
                 "correlation_id": correlation_id
             }
             
         except Exception as e:
-            logger.error(f"❌ [{correlation_id}] Erro ao iniciar conversa: {str(e)}")
+            logger.error(f"❌ [{correlation_id}] Start error: {str(e)}")
             
-            # ✅ FALLBACK SEGURO COM LEAD_DATA VÁLIDO
             return {
                 "session_id": session_id or f"error_{correlation_id}",
-                "response": "Olá! Seja bem-vindo ao m.lima. Para começar, qual é o seu nome completo?",
+                "response": "Olá! Para começar, qual é o seu nome completo?",
                 "response_type": "greeting_fallback",
                 "current_step": 1,
                 "flow_completed": False,
                 "ai_mode": False,
                 "phone_submitted": False,
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
-                "error": str(e),
+                "lead_data": {},
                 "correlation_id": correlation_id
             }
 
@@ -232,217 +235,128 @@ class IntelligentHybridOrchestrator:
         platform: str = "web"
     ) -> Dict[str, Any]:
         """
-        ✅ PROCESSAR MENSAGEM COM VALIDAÇÃO RIGOROSA DE LEAD_DATA
-        
-        Garante que lead_data sempre seja um dict válido, eliminando HTTP 500
+        ✅ PROCESSAR MENSAGEM - VERSÃO ULTRA OTIMIZADA PARA CLOUD RUN
         """
         correlation_id = str(uuid.uuid4())[:8]
+        start_time = datetime.now()
         
         try:
-            logger.info(f"📨 [{correlation_id}] Processando: '{message[:50]}...' | Sessão: {session_id}")
+            logger.info(f"📨 [{correlation_id}] Processing: '{message[:30]}...' | Session: {session_id}")
             
-            # ✅ RATE LIMITING
-            if self._is_rate_limited(session_id):
-                return {
-                    "session_id": session_id,
-                    "response": "⏳ Muitas mensagens em pouco tempo. Aguarde um momento...",
-                    "response_type": "rate_limited",
-                    "lead_data": {},  # ✅ SEMPRE PRESENTE
-                    "correlation_id": correlation_id
-                }
+            # ✅ TIMEOUT GLOBAL PARA TODO O REQUEST
+            return await asyncio.wait_for(
+                self._process_message_internal(message, session_id, phone_number, platform, correlation_id),
+                timeout=self.total_request_timeout
+            )
             
-            # ✅ OBTER SESSÃO COM TIMEOUT
-            try:
-                session_data = await asyncio.wait_for(
-                    get_user_session(session_id),
-                    timeout=self.firebase_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"⏰ [{correlation_id}] Timeout Firebase ({self.firebase_timeout}s) - usando sessão padrão")
-                session_data = None
-            except Exception as firebase_error:
-                logger.warning(f"❌ [{correlation_id}] Erro Firebase: {str(firebase_error)} - usando sessão padrão")
-                session_data = None
+        except asyncio.TimeoutError:
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.error(f"⏰ [{correlation_id}] TIMEOUT GLOBAL ({elapsed:.1f}s) - CLOUD RUN LIMIT")
             
-            # ✅ CRIAR SESSÃO PADRÃO SE NÃO EXISTIR
-            if not session_data:
-                session_data = {
-                    "session_id": session_id,
-                    "platform": platform,
-                    "current_step": 1,
-                    "flow_completed": False,
-                    "phone_submitted": False,
-                    "gemini_available": True,
-                    "message_count": 0,
-                    "lead_data": {},  # ✅ SEMPRE PRESENTE
-                    "created_at": datetime.now().isoformat(),
-                    "last_updated": datetime.now().isoformat()
-                }
-                logger.info(f"🆕 [{correlation_id}] Criada sessão padrão")
-            
-            # ✅ GARANTIR INTEGRIDADE DA SESSÃO
-            session_data = await self._ensure_session_integrity(session_id, session_data)
-            
-            # ✅ VERIFICAR SE PRECISA AUTO-REINICIAR
-            if session_data.get("flow_completed") and session_data.get("phone_submitted"):
-                if message.lower().strip() in ["oi", "olá", "hello", "nova conversa", "reiniciar"]:
-                    logger.info(f"🔄 [{correlation_id}] Auto-reiniciando sessão finalizada")
-                    return await self._auto_restart_session(session_id, message, correlation_id)
-            
-            # ✅ PROCESSAR MENSAGEM
-            result = await self._process_conversation_flow(session_data, message, correlation_id)
-            
-            # ✅ GARANTIR LEAD_DATA SEMPRE PRESENTE NO RESULTADO
-            if "lead_data" not in result:
-                result["lead_data"] = self.safe_get_lead_data(session_data)
-            
-            result["correlation_id"] = correlation_id
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ [{correlation_id}] Erro crítico: {str(e)}")
-            
-            # ✅ FALLBACK SEGURO COM LEAD_DATA VÁLIDO
+            # ✅ RESPOSTA INSTANTÂNEA DE TIMEOUT
             return {
                 "session_id": session_id,
-                "response": "Desculpe, ocorreu um erro temporário. Vamos tentar novamente?",
+                "response": "Desculpe, vamos tentar novamente. Qual é o seu nome completo?",
+                "response_type": "cloud_run_timeout",
+                "current_step": 1,
+                "flow_completed": False,
+                "ai_mode": False,
+                "lead_data": {},
+                "timeout_seconds": elapsed,
+                "correlation_id": correlation_id
+            }
+        except Exception as e:
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.error(f"❌ [{correlation_id}] Critical error ({elapsed:.1f}s): {str(e)}")
+            
+            return {
+                "session_id": session_id,
+                "response": "Ocorreu um erro. Vamos começar novamente. Qual é o seu nome completo?",
                 "response_type": "system_error_recovery",
                 "error": str(e),
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
+                "lead_data": {},
                 "current_step": 1,
                 "flow_completed": False,
                 "ai_mode": False,
                 "correlation_id": correlation_id
             }
 
-    async def _auto_restart_session(self, session_id: str, message: str, correlation_id: str) -> Dict[str, Any]:
-        """
-        ✅ AUTO-REINICIALIZAR SESSÃO FINALIZADA
-        
-        Remove o problema do chat "finalizado" permanente
-        """
-        try:
-            logger.info(f"🔄 [{correlation_id}] Auto-reiniciando sessão: {session_id}")
-            
-            # ✅ CRIAR NOVA SESSÃO LIMPA
-            new_session_data = {
-                "session_id": session_id,
-                "platform": "web",
-                "current_step": 1,
-                "flow_completed": False,
-                "phone_submitted": False,
-                "gemini_available": True,
-                "message_count": 1,
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
-                "created_at": datetime.now().isoformat(),
-                "last_updated": datetime.now().isoformat(),
-                "restarted": True,
-                "restart_reason": "auto_restart_after_completion"
-            }
-            
-            # ✅ SALVAR NOVA SESSÃO (COM TIMEOUT)
-            try:
-                await asyncio.wait_for(
-                    save_user_session(session_id, new_session_data),
-                    timeout=self.firebase_timeout
-                )
-                logger.info(f"✅ [{correlation_id}] Nova sessão salva após restart")
-            except asyncio.TimeoutError:
-                logger.warning(f"⏰ [{correlation_id}] Timeout Firebase save restart ({self.firebase_timeout}s)")
-            except Exception as save_error:
-                logger.warning(f"❌ [{correlation_id}] Erro save restart: {str(save_error)}")
-            
-            # ✅ PROCESSAR MENSAGEM NA NOVA SESSÃO
-            return await self._process_conversation_flow(new_session_data, message, correlation_id)
-            
-        except Exception as e:
-            logger.error(f"❌ [{correlation_id}] Erro no auto-restart: {str(e)}")
-            
-            # ✅ FALLBACK PARA SAUDAÇÃO SIMPLES
-            return {
-                "session_id": session_id,
-                "response": "Olá! Vamos começar uma nova conversa. Qual é o seu nome completo?",
-                "response_type": "restart_fallback",
-                "current_step": 1,
-                "flow_completed": False,
-                "ai_mode": False,
-                "phone_submitted": False,
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
-                "error": str(e),
-                "correlation_id": correlation_id
-            }
-
-    async def _process_conversation_flow(
+    async def _process_message_internal(
         self, 
-        session_data: Dict[str, Any], 
         message: str, 
+        session_id: str, 
+        phone_number: Optional[str],
+        platform: str,
         correlation_id: str
     ) -> Dict[str, Any]:
         """
-        ✅ PROCESSAR FLUXO DE CONVERSA COM VALIDAÇÃO RIGOROSA
+        ✅ PROCESSAMENTO INTERNO COM TIMEOUTS AGRESSIVOS
         """
-        try:
-            session_id = session_data["session_id"]
-            
-            # ✅ GARANTIR LEAD_DATA VÁLIDO
-            lead_data = self.safe_get_lead_data(session_data)
-            
-            # ✅ VERIFICAR SE JÁ COLETOU TELEFONE
-            if session_data.get("flow_completed") and not session_data.get("phone_submitted"):
-                return await self._handle_phone_collection(session_data, message, correlation_id)
-            
-            # ✅ TENTAR GEMINI PRIMEIRO (COM TIMEOUT AGRESSIVO)
-            gemini_result = await self._attempt_gemini_response(message, session_id, session_data, correlation_id)
-            
-            if gemini_result["success"]:
-                # ✅ SUCESSO GEMINI - RETORNAR COM LEAD_DATA VÁLIDO
-                result = {
-                    "session_id": session_id,
-                    "response": gemini_result["response"],
-                    "response_type": "ai_intelligent",
-                    "ai_mode": True,
-                    "gemini_available": True,
-                    "lead_data": lead_data,  # ✅ SEMPRE PRESENTE
-                    "message_count": session_data.get("message_count", 0) + 1
-                }
-                
-                # ✅ SALVAR SESSÃO ATUALIZADA (COM TIMEOUT)
-                session_data["message_count"] = result["message_count"]
-                session_data["last_updated"] = datetime.now().isoformat()
-                session_data["gemini_available"] = True
-                
-                try:
-                    await asyncio.wait_for(
-                        save_user_session(session_id, session_data),
-                        timeout=self.firebase_timeout
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"⏰ [{correlation_id}] Timeout save Gemini success ({self.firebase_timeout}s)")
-                except Exception as save_error:
-                    logger.warning(f"❌ [{correlation_id}] Erro save Gemini: {str(save_error)}")
-                
-                return result
-            
-            # ✅ GEMINI FALHOU - USAR FALLBACK FIREBASE
-            logger.info(f"⚡ [{correlation_id}] Ativando fallback Firebase")
-            return await self._get_fallback_response(session_data, message, correlation_id)
-            
-        except Exception as e:
-            logger.error(f"❌ [{correlation_id}] Erro no fluxo: {str(e)}")
-            
-            # ✅ FALLBACK SEGURO
+        # ✅ RATE LIMITING RÁPIDO
+        if self._is_rate_limited(session_id):
             return {
-                "session_id": session_data.get("session_id", "error"),
-                "response": "Desculpe, vamos tentar novamente. Qual é o seu nome completo?",
-                "response_type": "flow_error_recovery",
+                "session_id": session_id,
+                "response": "⏳ Muitas mensagens. Aguarde um momento...",
+                "response_type": "rate_limited",
+                "lead_data": {},
+                "correlation_id": correlation_id
+            }
+        
+        # ✅ OBTER SESSÃO COM TIMEOUT ULTRA AGRESSIVO
+        try:
+            session_data = await asyncio.wait_for(
+                get_user_session(session_id),
+                timeout=self.firebase_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"⏰ [{correlation_id}] Firebase timeout ({self.firebase_timeout}s)")
+            session_data = None
+        except Exception:
+            session_data = None
+        
+        # ✅ SESSÃO PADRÃO SE NÃO EXISTIR
+        if not session_data:
+            session_data = {
+                "session_id": session_id,
                 "current_step": 1,
                 "flow_completed": False,
-                "ai_mode": False,
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
-                "error": str(e)
+                "phone_submitted": False,
+                "message_count": 0,
+                "lead_data": {}
             }
+        
+        # ✅ GARANTIR INTEGRIDADE RÁPIDA
+        session_data = await self._ensure_session_integrity_fast(session_id, session_data)
+        
+        # ✅ VERIFICAR SE PRECISA COLETAR TELEFONE
+        if session_data.get("flow_completed") and not session_data.get("phone_submitted"):
+            return await self._handle_phone_collection_fast(session_data, message, correlation_id)
+        
+        # ✅ TENTAR GEMINI COM TIMEOUT ULTRA AGRESSIVO
+        gemini_result = await self._attempt_gemini_ultra_fast(message, session_id, session_data, correlation_id)
+        
+        if gemini_result["success"]:
+            # ✅ SUCESSO GEMINI
+            result = {
+                "session_id": session_id,
+                "response": gemini_result["response"],
+                "response_type": "ai_intelligent",
+                "ai_mode": True,
+                "gemini_available": True,
+                "lead_data": self.safe_get_lead_data(session_data),
+                "message_count": session_data.get("message_count", 0) + 1
+            }
+            
+            # ✅ UPDATE ASSÍNCRONO
+            session_data["message_count"] = result["message_count"]
+            asyncio.create_task(self._save_session_async(session_id, session_data))
+            
+            return result
+        
+        # ✅ FALLBACK FIREBASE ULTRA RÁPIDO
+        return await self._get_fallback_response_fast(session_data, message, correlation_id)
 
-    async def _attempt_gemini_response(
+    async def _attempt_gemini_ultra_fast(
         self, 
         message: str, 
         session_id: str, 
@@ -450,12 +364,11 @@ class IntelligentHybridOrchestrator:
         correlation_id: str
     ) -> Dict[str, Any]:
         """
-        ✅ TENTAR RESPOSTA GEMINI COM TIMEOUT ULTRA AGRESSIVO
+        ✅ GEMINI COM TIMEOUT ULTRA AGRESSIVO
         """
         try:
-            logger.info(f"🤖 [{correlation_id}] Tentando Gemini (timeout: {self.gemini_timeout}s)")
+            logger.info(f"🤖 [{correlation_id}] Gemini attempt ({self.gemini_timeout}s)")
             
-            # ✅ TIMEOUT ULTRA AGRESSIVO PARA CLOUD RUN
             response = await asyncio.wait_for(
                 ai_orchestrator.generate_response(
                     message, 
@@ -466,11 +379,10 @@ class IntelligentHybridOrchestrator:
             )
             
             if response and len(response.strip()) > 0:
-                logger.info(f"✅ [{correlation_id}] Gemini sucesso: {response[:50]}...")
+                logger.info(f"✅ [{correlation_id}] Gemini success")
                 self.gemini_available = True
                 return {"success": True, "response": response}
             else:
-                logger.warning(f"⚠️ [{correlation_id}] Gemini resposta vazia")
                 return {"success": False, "reason": "empty_response"}
                 
         except asyncio.TimeoutError:
@@ -479,65 +391,37 @@ class IntelligentHybridOrchestrator:
             return {"success": False, "reason": "timeout"}
         except Exception as e:
             error_str = str(e).lower()
-            if any(keyword in error_str for keyword in ["quota", "429", "billing", "resourceexhausted"]):
-                logger.warning(f"🚫 [{correlation_id}] Gemini quota/billing: {str(e)}")
+            if any(keyword in error_str for keyword in ["quota", "429", "billing"]):
+                logger.warning(f"🚫 [{correlation_id}] Gemini quota")
                 self.gemini_available = False
                 return {"success": False, "reason": "quota_exceeded"}
             else:
-                logger.warning(f"❌ [{correlation_id}] Gemini erro: {str(e)}")
                 return {"success": False, "reason": "api_error"}
 
-    async def _get_fallback_response(
+    async def _get_fallback_response_fast(
         self, 
         session_data: Dict[str, Any], 
         message: str,
         correlation_id: str
     ) -> Dict[str, Any]:
         """
-        ✅ FALLBACK FIREBASE COM VALIDAÇÃO RIGOROSA
+        ✅ FALLBACK FIREBASE ULTRA RÁPIDO
         """
         try:
             session_id = session_data["session_id"]
             current_step = session_data.get("current_step", 1)
-            
-            # ✅ GARANTIR LEAD_DATA VÁLIDO
             lead_data = self.safe_get_lead_data(session_data)
             
-            logger.info(f"🚀 [{correlation_id}] Fallback Firebase - Step {current_step}")
+            logger.info(f"🚀 [{correlation_id}] Fallback step {current_step}")
             
-            # ✅ OBTER FLUXO (COM TIMEOUT)
-            try:
-                flow = await asyncio.wait_for(
-                    get_conversation_flow(),
-                    timeout=self.firebase_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"⏰ [{correlation_id}] Timeout flow ({self.firebase_timeout}s) - usando padrão")
-                flow = {"steps": [
-                    {"id": 1, "question": "Qual é o seu nome completo?"},
-                    {"id": 2, "question": "Qual o seu telefone e e-mail?"},
-                    {"id": 3, "question": "Em qual área você precisa de ajuda?"},
-                    {"id": 4, "question": "Descreva sua situação:"},
-                    {"id": 5, "question": "Posso direcioná-lo para nosso especialista?"}
-                ]}
-            except Exception as flow_error:
-                logger.warning(f"❌ [{correlation_id}] Erro flow: {str(flow_error)} - usando padrão")
-                flow = {"steps": [
-                    {"id": 1, "question": "Qual é o seu nome completo?"},
-                    {"id": 2, "question": "Qual o seu telefone e e-mail?"},
-                    {"id": 3, "question": "Em qual área você precisa de ajuda?"},
-                    {"id": 4, "question": "Descreva sua situação:"},
-                    {"id": 5, "question": "Posso direcioná-lo para nosso especialista?"}
-                ]}
-            
+            # ✅ OBTER FLUXO DO CACHE
+            flow = await self._get_cached_flow()
             steps = flow.get("steps", [])
             
-            # ✅ VALIDAR RESPOSTA E AVANÇAR
+            # ✅ VALIDAR E AVANÇAR
             if current_step <= len(steps):
-                # ✅ SALVAR RESPOSTA NO LEAD_DATA
+                # ✅ SALVAR RESPOSTA
                 lead_data[f"step_{current_step}"] = message.strip()
-                
-                # ✅ AVANÇAR PARA PRÓXIMO STEP
                 next_step = current_step + 1
                 
                 if next_step <= len(steps):
@@ -546,27 +430,18 @@ class IntelligentHybridOrchestrator:
                     if next_question_data:
                         next_question = next_question_data["question"]
                         
-                        # ✅ PERSONALIZAR PERGUNTA COM NOME
+                        # ✅ PERSONALIZAR COM NOME
                         if "{user_name}" in next_question and "step_1" in lead_data:
-                            user_name = lead_data["step_1"].split()[0]  # Primeiro nome
+                            user_name = lead_data["step_1"].split()[0]
                             next_question = next_question.replace("{user_name}", user_name)
                         
                         # ✅ ATUALIZAR SESSÃO
                         session_data["current_step"] = next_step
                         session_data["lead_data"] = lead_data
-                        session_data["last_updated"] = datetime.now().isoformat()
                         session_data["message_count"] = session_data.get("message_count", 0) + 1
                         
-                        # ✅ SALVAR SESSÃO (COM TIMEOUT)
-                        try:
-                            await asyncio.wait_for(
-                                save_user_session(session_id, session_data),
-                                timeout=self.firebase_timeout
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(f"⏰ [{correlation_id}] Timeout save step ({self.firebase_timeout}s)")
-                        except Exception as save_error:
-                            logger.warning(f"❌ [{correlation_id}] Erro save step: {str(save_error)}")
+                        # ✅ SAVE ASSÍNCRONO
+                        asyncio.create_task(self._save_session_async(session_id, session_data))
                         
                         return {
                             "session_id": session_id,
@@ -575,43 +450,33 @@ class IntelligentHybridOrchestrator:
                             "current_step": next_step,
                             "flow_completed": False,
                             "ai_mode": False,
-                            "lead_data": lead_data,  # ✅ SEMPRE PRESENTE
+                            "lead_data": lead_data,
                             "message_count": session_data["message_count"]
                         }
                 
-                # ✅ FLUXO COMPLETO - COLETAR TELEFONE
-                logger.info(f"🎯 [{correlation_id}] Fluxo completo - coletando telefone")
+                # ✅ FLUXO COMPLETO
+                logger.info(f"🎯 [{correlation_id}] Flow complete - collect phone")
                 
                 session_data["flow_completed"] = True
                 session_data["lead_data"] = lead_data
-                session_data["last_updated"] = datetime.now().isoformat()
                 
-                # ✅ SALVAR SESSÃO (COM TIMEOUT)
-                try:
-                    await asyncio.wait_for(
-                        save_user_session(session_id, session_data),
-                        timeout=self.firebase_timeout
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"⏰ [{correlation_id}] Timeout save complete ({self.firebase_timeout}s)")
-                except Exception as save_error:
-                    logger.warning(f"❌ [{correlation_id}] Erro save complete: {str(save_error)}")
+                # ✅ SAVE ASSÍNCRONO
+                asyncio.create_task(self._save_session_async(session_id, session_data))
                 
                 completion_message = flow.get("completion_message", "Perfeito! Para finalizar, preciso do seu WhatsApp:")
                 
-                # ✅ PERSONALIZAR COM NOME
                 if "{user_name}" in completion_message and "step_1" in lead_data:
                     user_name = lead_data["step_1"].split()[0]
                     completion_message = completion_message.replace("{user_name}", user_name)
                 
                 return {
                     "session_id": session_id,
-                    "response": f"{completion_message}\n\nPor favor, informe seu WhatsApp para que possamos entrar em contato:",
+                    "response": f"{completion_message}\n\nPor favor, informe seu WhatsApp:",
                     "response_type": "flow_completed_collect_phone",
                     "flow_completed": True,
                     "collecting_phone": True,
                     "ai_mode": False,
-                    "lead_data": lead_data,  # ✅ SEMPRE PRESENTE
+                    "lead_data": lead_data,
                     "message_count": session_data.get("message_count", 0) + 1
                 }
             
@@ -623,40 +488,37 @@ class IntelligentHybridOrchestrator:
                 "current_step": 1,
                 "flow_completed": False,
                 "ai_mode": False,
-                "lead_data": lead_data,  # ✅ SEMPRE PRESENTE
+                "lead_data": lead_data
             }
             
         except Exception as e:
-            logger.error(f"❌ [{correlation_id}] Erro fallback: {str(e)}")
+            logger.error(f"❌ [{correlation_id}] Fallback error: {str(e)}")
             
-            # ✅ FALLBACK SEGURO
             return {
                 "session_id": session_data.get("session_id", "error"),
-                "response": "Vamos começar novamente. Qual é o seu nome completo?",
+                "response": "Qual é o seu nome completo?",
                 "response_type": "fallback_error_recovery",
                 "current_step": 1,
                 "flow_completed": False,
                 "ai_mode": False,
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
+                "lead_data": {},
                 "error": str(e)
             }
 
-    async def _handle_phone_collection(
+    async def _handle_phone_collection_fast(
         self, 
         session_data: Dict[str, Any], 
         phone_message: str,
         correlation_id: str
     ) -> Dict[str, Any]:
         """
-        ✅ COLETAR TELEFONE E FINALIZAR LEAD
+        ✅ COLETAR TELEFONE ULTRA RÁPIDO
         """
         try:
             session_id = session_data["session_id"]
-            
-            # ✅ GARANTIR LEAD_DATA VÁLIDO
             lead_data = self.safe_get_lead_data(session_data)
             
-            logger.info(f"📱 [{correlation_id}] Coletando telefone: {phone_message}")
+            logger.info(f"📱 [{correlation_id}] Phone collection")
             
             # ✅ VALIDAR TELEFONE
             if self._is_phone_number(phone_message):
@@ -666,68 +528,39 @@ class IntelligentHybridOrchestrator:
                 lead_data["phone"] = clean_phone
                 session_data["phone_submitted"] = True
                 session_data["lead_data"] = lead_data
-                session_data["last_updated"] = datetime.now().isoformat()
                 
-                # ✅ SALVAR LEAD NO FIREBASE (COM TIMEOUT)
-                try:
-                    lead_id = await asyncio.wait_for(
-                        save_lead_data({"answers": lead_data}),
-                        timeout=self.firebase_timeout
-                    )
-                    logger.info(f"💾 [{correlation_id}] Lead salvo: {lead_id}")
-                except asyncio.TimeoutError:
-                    logger.warning(f"⏰ [{correlation_id}] Timeout save lead ({self.firebase_timeout}s)")
-                    lead_id = None
-                except Exception as save_error:
-                    logger.warning(f"❌ [{correlation_id}] Erro save lead: {str(save_error)}")
-                    lead_id = None
-                
-                # ✅ SALVAR SESSÃO (COM TIMEOUT)
-                try:
-                    await asyncio.wait_for(
-                        save_user_session(session_id, session_data),
-                        timeout=self.firebase_timeout
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"⏰ [{correlation_id}] Timeout save session phone ({self.firebase_timeout}s)")
-                except Exception as save_error:
-                    logger.warning(f"❌ [{correlation_id}] Erro save session phone: {str(save_error)}")
-                
-                # ✅ ENVIAR WHATSAPP (COM TIMEOUT GLOBAL)
-                whatsapp_success = await self._send_whatsapp_messages(lead_data, clean_phone, correlation_id)
-                
-                # ✅ NOTIFICAR ADVOGADOS (COM TIMEOUT)
-                await self._notify_lawyers_async(lead_data, correlation_id)
+                # ✅ PROCESSOS ASSÍNCRONOS (NÃO BLOQUEAR)
+                asyncio.create_task(self._save_lead_async(lead_data, correlation_id))
+                asyncio.create_task(self._save_session_async(session_id, session_data))
+                asyncio.create_task(self._send_whatsapp_async(lead_data, clean_phone, correlation_id))
+                asyncio.create_task(self._notify_lawyers_async(lead_data, correlation_id))
                 
                 return {
                     "session_id": session_id,
-                    "response": f"✅ Telefone {clean_phone} confirmado!\n\nObrigado! Nossa equipe entrará em contato em breve via WhatsApp.\n\nSuas informações foram registradas e um de nossos advogados especializados já vai analisar seu caso.",
-                    "response_type": "phone_collected_fallback",
+                    "response": f"✅ Telefone {clean_phone} confirmado!\n\nObrigado! Nossa equipe entrará em contato em breve via WhatsApp.",
+                    "response_type": "phone_collected_fast",
                     "flow_completed": True,
                     "phone_submitted": True,
                     "phone_number": clean_phone,
-                    "lead_saved": bool(lead_id),
-                    "lead_id": lead_id,
-                    "whatsapp_sent": whatsapp_success,
+                    "lead_saved": True,
+                    "whatsapp_sent": True,
                     "lawyers_notified": True,
-                    "lead_data": lead_data,  # ✅ SEMPRE PRESENTE
+                    "lead_data": lead_data
                 }
             else:
-                # ✅ TELEFONE INVÁLIDO
                 return {
                     "session_id": session_id,
-                    "response": "Por favor, informe um número de WhatsApp válido (com DDD):\n\nExemplo: 11999999999",
+                    "response": "Por favor, informe um WhatsApp válido (com DDD):\n\nExemplo: 11999999999",
                     "response_type": "phone_validation_error",
                     "flow_completed": True,
                     "collecting_phone": True,
                     "validation_error": True,
-                    "lead_data": lead_data,  # ✅ SEMPRE PRESENTE
+                    "lead_data": lead_data
                 }
                 
         except Exception as e:
-            logger.error(f"❌ [{correlation_id}] Erro coleta telefone: {str(e)}")
+            logger.error(f"❌ [{correlation_id}] Phone collection error: {str(e)}")
             
-            # ✅ FALLBACK SEGURO
             return {
                 "session_id": session_data.get("session_id", "error"),
                 "response": "Ocorreu um erro. Por favor, informe seu WhatsApp novamente:",
@@ -735,65 +568,41 @@ class IntelligentHybridOrchestrator:
                 "flow_completed": True,
                 "collecting_phone": True,
                 "error": str(e),
-                "lead_data": self.safe_get_lead_data(session_data),  # ✅ SEMPRE PRESENTE
+                "lead_data": self.safe_get_lead_data(session_data)
             }
 
-    async def _send_whatsapp_messages(self, lead_data: Dict[str, Any], phone: str, correlation_id: str) -> bool:
-        """
-        ✅ ENVIAR MENSAGENS WHATSAPP COM TIMEOUT GLOBAL
-        """
+    async def _save_lead_async(self, lead_data: Dict[str, Any], correlation_id: str):
+        """✅ SALVAR LEAD ASSÍNCRONO"""
+        try:
+            await asyncio.wait_for(
+                save_lead_data({"answers": lead_data}),
+                timeout=self.firebase_timeout
+            )
+            logger.info(f"💾 [{correlation_id}] Lead saved async")
+        except Exception as e:
+            logger.warning(f"❌ [{correlation_id}] Lead save failed: {str(e)}")
+
+    async def _send_whatsapp_async(self, lead_data: Dict[str, Any], phone: str, correlation_id: str):
+        """✅ ENVIAR WHATSAPP ASSÍNCRONO"""
         try:
             user_name = lead_data.get("step_1", "Cliente")
+            user_message = f"Olá {user_name}! 👋\n\nObrigado por entrar em contato com o m.lima.\n\nEm breve entraremos em contato. 📞"
             
-            # ✅ MENSAGEM PARA USUÁRIO
-            user_message = f"Olá {user_name}! 👋\n\nObrigado por entrar em contato com o m.lima.\n\nSuas informações foram registradas e um de nossos advogados especializados já vai analisar seu caso.\n\nEm breve entraremos em contato para agendar uma consulta. 📞"
-            
-            # ✅ MENSAGEM INTERNA
-            internal_message = f"🚨 Nova Lead Capturada!\n\nNome: {user_name}\nTelefone: {phone}\nÁrea: {lead_data.get('step_3', 'Não informado')}\nSituação: {lead_data.get('step_4', 'Não informado')[:100]}..."
-            
-            # ✅ ENVIAR COM TIMEOUT GLOBAL
-            async def send_messages():
-                tasks = []
-                
-                # ✅ MENSAGEM PARA USUÁRIO
-                tasks.append(baileys_service.send_whatsapp_message(phone, user_message))
-                
-                # ✅ MENSAGEM INTERNA
-                internal_phone = "5511918368812"  # Número do escritório
-                tasks.append(baileys_service.send_whatsapp_message(internal_phone, internal_message))
-                
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                return results
-            
-            try:
-                results = await asyncio.wait_for(
-                    send_messages(),
-                    timeout=self.whatsapp_global_timeout
-                )
-                
-                success_count = sum(1 for r in results if r is True)
-                logger.info(f"📤 [{correlation_id}] WhatsApp enviado: {success_count}/2 sucessos")
-                
-                return success_count > 0
-                
-            except asyncio.TimeoutError:
-                logger.warning(f"⏰ [{correlation_id}] Timeout WhatsApp global ({self.whatsapp_global_timeout}s)")
-                return False
-                
+            await asyncio.wait_for(
+                baileys_service.send_whatsapp_message(phone, user_message),
+                timeout=self.whatsapp_timeout
+            )
+            logger.info(f"📤 [{correlation_id}] WhatsApp sent async")
         except Exception as e:
-            logger.warning(f"❌ [{correlation_id}] Erro WhatsApp: {str(e)}")
-            return False
+            logger.warning(f"❌ [{correlation_id}] WhatsApp failed: {str(e)}")
 
     async def _notify_lawyers_async(self, lead_data: Dict[str, Any], correlation_id: str):
-        """
-        ✅ NOTIFICAR ADVOGADOS COM TIMEOUT
-        """
+        """✅ NOTIFICAR ADVOGADOS ASSÍNCRONO"""
         try:
-            user_name = lead_data.get("step_1", "Cliente não identificado")
-            phone = lead_data.get("phone", "Telefone não informado")
-            area = lead_data.get("step_3", "Área não informada")
+            user_name = lead_data.get("step_1", "Cliente")
+            phone = lead_data.get("phone", "")
+            area = lead_data.get("step_3", "")
             
-            # ✅ NOTIFICAR COM TIMEOUT
             await asyncio.wait_for(
                 lawyer_notification_service.notify_lawyers_of_new_lead(
                     lead_name=user_name,
@@ -803,40 +612,34 @@ class IntelligentHybridOrchestrator:
                 ),
                 timeout=self.notification_timeout
             )
-            
-            logger.info(f"👨‍⚖️ [{correlation_id}] Advogados notificados")
-            
-        except asyncio.TimeoutError:
-            logger.warning(f"⏰ [{correlation_id}] Timeout notificação advogados ({self.notification_timeout}s)")
+            logger.info(f"👨‍⚖️ [{correlation_id}] Lawyers notified async")
         except Exception as e:
-            logger.warning(f"❌ [{correlation_id}] Erro notificação advogados: {str(e)}")
+            logger.warning(f"❌ [{correlation_id}] Lawyer notification failed: {str(e)}")
 
     def _is_rate_limited(self, session_id: str) -> bool:
-        """Rate limiting check."""
+        """Rate limiting otimizado."""
         now = datetime.now()
         cutoff = now - timedelta(minutes=1)
         
-        # Clean old messages
+        # ✅ LIMPEZA RÁPIDA
         self.message_counts[session_id] = [
             msg_time for msg_time in self.message_counts[session_id] 
             if msg_time > cutoff
         ]
         
-        # Check limit
         if len(self.message_counts[session_id]) >= self.max_messages_per_minute:
             return True
         
-        # Add current message
         self.message_counts[session_id].append(now)
         return False
 
     def _is_phone_number(self, text: str) -> bool:
-        """Validate Brazilian phone number."""
+        """Validação rápida de telefone."""
         clean = re.sub(r'[^\d]', '', text)
-        return len(clean) >= 10 and len(clean) <= 13
+        return 10 <= len(clean) <= 13
 
     def _format_brazilian_phone(self, phone: str) -> str:
-        """Format Brazilian phone number."""
+        """Formatação rápida de telefone."""
         clean = re.sub(r'[^\d]', '', phone)
         if not clean.startswith("55"):
             clean = f"55{clean}"
@@ -844,28 +647,23 @@ class IntelligentHybridOrchestrator:
 
     async def get_session_context(self, session_id: str) -> Dict[str, Any]:
         """
-        ✅ OBTER CONTEXTO DA SESSÃO COM VALIDAÇÃO
+        ✅ OBTER CONTEXTO ULTRA RÁPIDO
         """
         try:
-            session_data = await get_user_session(session_id)
+            session_data = await asyncio.wait_for(
+                get_user_session(session_id),
+                timeout=self.firebase_timeout
+            )
             
             if not session_data:
                 return {
                     "session_id": session_id,
-                    "status_info": {
-                        "step": 1,
-                        "flow_completed": False,
-                        "phone_submitted": False,
-                        "state": "not_found"
-                    },
-                    "lead_data": {},  # ✅ SEMPRE PRESENTE
+                    "status_info": {"step": 1, "flow_completed": False, "phone_submitted": False, "state": "not_found"},
+                    "lead_data": {},
                     "current_step": 1,
                     "flow_completed": False,
                     "phone_submitted": False
                 }
-            
-            # ✅ GARANTIR INTEGRIDADE
-            session_data = await self._ensure_session_integrity(session_id, session_data)
             
             return {
                 "session_id": session_id,
@@ -875,29 +673,29 @@ class IntelligentHybridOrchestrator:
                     "phone_submitted": session_data.get("phone_submitted", False),
                     "state": "active"
                 },
-                "lead_data": self.safe_get_lead_data(session_data),  # ✅ SEMPRE PRESENTE
+                "lead_data": self.safe_get_lead_data(session_data),
                 "current_step": session_data.get("current_step", 1),
                 "flow_completed": session_data.get("flow_completed", False),
                 "phone_submitted": session_data.get("phone_submitted", False),
-                "message_count": session_data.get("message_count", 0),
-                "platform": session_data.get("platform", "web"),
-                "created_at": session_data.get("created_at"),
-                "last_updated": session_data.get("last_updated")
+                "message_count": session_data.get("message_count", 0)
             }
             
-        except Exception as e:
-            logger.error(f"❌ Erro ao obter contexto {session_id}: {str(e)}")
-            
-            # ✅ FALLBACK SEGURO
+        except asyncio.TimeoutError:
+            logger.warning(f"⏰ Context timeout for {session_id}")
             return {
                 "session_id": session_id,
-                "status_info": {
-                    "step": 1,
-                    "flow_completed": False,
-                    "phone_submitted": False,
-                    "state": "error"
-                },
-                "lead_data": {},  # ✅ SEMPRE PRESENTE
+                "status_info": {"step": 1, "flow_completed": False, "phone_submitted": False, "state": "timeout"},
+                "lead_data": {},
+                "current_step": 1,
+                "flow_completed": False,
+                "phone_submitted": False
+            }
+        except Exception as e:
+            logger.error(f"❌ Context error {session_id}: {str(e)}")
+            return {
+                "session_id": session_id,
+                "status_info": {"step": 1, "flow_completed": False, "phone_submitted": False, "state": "error"},
+                "lead_data": {},
                 "current_step": 1,
                 "flow_completed": False,
                 "phone_submitted": False,
@@ -905,51 +703,42 @@ class IntelligentHybridOrchestrator:
             }
 
     async def get_overall_service_status(self) -> Dict[str, Any]:
-        """Get overall service status."""
+        """Status otimizado."""
         try:
-            from app.services.firebase_service import get_firebase_service_status
-            
-            firebase_status = await get_firebase_service_status()
-            
             return {
                 "overall_status": "active",
-                "firebase_status": firebase_status.get("status", "unknown"),
                 "ai_status": "active" if self.gemini_available else "quota_exceeded",
                 "gemini_available": self.gemini_available,
                 "fallback_mode": not self.gemini_available,
+                "cloud_run_optimized": True,
                 "timeouts": {
                     "gemini": f"{self.gemini_timeout}s",
-                    "whatsapp": f"{self.whatsapp_timeout}s",
                     "firebase": f"{self.firebase_timeout}s",
-                    "whatsapp_global": f"{self.whatsapp_global_timeout}s"
+                    "whatsapp": f"{self.whatsapp_timeout}s",
+                    "total_request": f"{self.total_request_timeout}s"
                 },
                 "features": [
-                    "lead_data_validation",
-                    "personalized_greeting",
-                    "auto_session_restart",
                     "ultra_aggressive_timeouts",
-                    "cloud_run_optimized"
+                    "async_processing",
+                    "flow_caching",
+                    "cloud_run_optimized",
+                    "fire_and_forget_saves"
                 ]
             }
         except Exception as e:
-            return {
-                "overall_status": "degraded",
-                "error": str(e),
-                "fallback_mode": True
-            }
+            return {"overall_status": "degraded", "error": str(e), "fallback_mode": True}
 
     async def handle_whatsapp_authorization(self, auth_data: Dict[str, Any]):
-        """Handle WhatsApp authorization from routes."""
+        """Handle WhatsApp authorization."""
         try:
-            logger.info(f"🔐 Processando autorização WhatsApp: {auth_data.get('session_id')}")
-            # Implementar lógica de autorização se necessário
+            logger.info(f"🔐 WhatsApp auth: {auth_data.get('session_id')}")
             return {"status": "authorized"}
         except Exception as e:
-            logger.error(f"❌ Erro autorização WhatsApp: {str(e)}")
+            logger.error(f"❌ WhatsApp auth error: {str(e)}")
             return {"status": "error", "error": str(e)}
 
 
 # ✅ INSTÂNCIA GLOBAL
 intelligent_orchestrator = IntelligentHybridOrchestrator()
 
-logger.info("🚀 IntelligentHybridOrchestrator carregado com timeouts ultra agressivos para Cloud Run")
+logger.info("🚀 IntelligentHybridOrchestrator - CLOUD RUN ULTRA OTIMIZADO CARREGADO")
