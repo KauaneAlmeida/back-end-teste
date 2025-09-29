@@ -12,7 +12,7 @@ services:
     environment:
       - NODE_ENV=production
       - PYTHONUNBUFFERED=1
-      - WHATSAPP_BOT_URL=http://law_firm_whatsapp_bot:8080   # 👈 interno 8080
+      - WHATSAPP_BOT_URL=http://34.27.244.115:8081   # ✅ VM EXTERNA
     env_file:
       - .env
     volumes:

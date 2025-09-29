@@ -284,8 +284,16 @@ Situação: {situation[:200]}{'...' if len(situation) > 200 else ''}
                     whatsapp_number = format_lawyer_phone_for_whatsapp(lawyer["phone"])
                     
                     # Send notification
+                    # ✅ CORREÇÃO: Extrair apenas o número limpo
+                    clean_phone_for_vm = ''.join(filter(str.isdigit, lawyer["phone"]))
+                    if not clean_phone_for_vm.startswith("55"):
+                        clean_phone_for_vm = f"55{clean_phone_for_vm}"
+                    
+                    logger.info(f"📤 Enviando notificação para advogado {lawyer['name']}")
+                    logger.info(f"📱 Número limpo: {clean_phone_for_vm}")
+                    
                     success = await baileys_service.send_whatsapp_message(
-                        whatsapp_number, 
+                        clean_phone_for_vm,  # ✅ Apenas número limpo
                         notification_message
                     )
                     
@@ -338,9 +346,13 @@ Situação: {situation[:200]}{'...' if len(situation) > 200 else ''}
         try:
             confirmation_message = f"✅ Você assumiu com sucesso este cliente: {lead_name}\n\nLead ID: {lead_id}\n\nPor favor, entre em contato com o cliente o quanto antes."
             
-            whatsapp_number = format_lawyer_phone_for_whatsapp(lawyer_info["phone"])
+            # ✅ CORREÇÃO: Extrair apenas o número limpo
+            clean_phone_for_vm = ''.join(filter(str.isdigit, lawyer_info["phone"]))
+            if not clean_phone_for_vm.startswith("55"):
+                clean_phone_for_vm = f"55{clean_phone_for_vm}"
+            
             success = await baileys_service.send_whatsapp_message(
-                whatsapp_number, 
+                clean_phone_for_vm,  # ✅ Apenas número limpo
                 confirmation_message
             )
             
@@ -373,9 +385,13 @@ Situação: {situation[:200]}{'...' if len(situation) > 200 else ''}
                     continue
                 
                 try:
-                    whatsapp_number = format_lawyer_phone_for_whatsapp(lawyer["phone"])
+                    # ✅ CORREÇÃO: Extrair apenas o número limpo
+                    clean_phone_for_vm = ''.join(filter(str.isdigit, lawyer["phone"]))
+                    if not clean_phone_for_vm.startswith("55"):
+                        clean_phone_for_vm = f"55{clean_phone_for_vm}"
+                    
                     await baileys_service.send_whatsapp_message(
-                        whatsapp_number, 
+                        clean_phone_for_vm,  # ✅ Apenas número limpo
                         notification_message
                     )
                     logger.info(f"📢 Notified {lawyer['name']} that case was taken")

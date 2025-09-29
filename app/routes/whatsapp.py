@@ -255,28 +255,38 @@ async def whatsapp_webhook(request: Request):
 @router.post("/whatsapp/send-initial-message")
 async def send_initial_whatsapp_message(request: dict):
     """
-    ❌ ENDPOINT DEPRECIADO - CHAT DA LANDING É INDEPENDENTE
+    ✅ ENDPOINT PARA TESTE DE ENVIO WHATSAPP
     
-    O chat da landing agora é completamente independente e NÃO redireciona para WhatsApp.
-    Este endpoint foi mantido apenas para compatibilidade, mas não deve ser usado.
+    Usado para testar o envio de mensagens WhatsApp via VM
     """
     try:
-        logger.warning("⚠️ ENDPOINT DEPRECIADO /whatsapp/send-initial-message chamado")
+        phone_number = request.get("phone_number", "")
+        message = request.get("message", "Teste de mensagem do backend")
+        
+        if not phone_number:
+            raise HTTPException(status_code=400, detail="phone_number é obrigatório")
+        
+        logger.info(f"📱 Teste de envio WhatsApp para {phone_number}")
+        
+        # ✅ CORREÇÃO: Passar apenas número limpo
+        clean_phone = ''.join(filter(str.isdigit, phone_number))
+        if not clean_phone.startswith("55"):
+            clean_phone = f"55{clean_phone}"
+        
+        success = await baileys_service.send_whatsapp_message(clean_phone, message)
         
         return {
-            "status": "deprecated",
-            "message": "Este endpoint foi depreciado. O chat da landing é independente e não redireciona para WhatsApp.",
-            "note": "Use o chat da landing diretamente ou o botão WhatsApp separadamente.",
-            "flows": {
-                "chat_landing": "Fluxo independente que termina notificando advogados",
-                "botao_whatsapp": "Fluxo separado via botão direto para WhatsApp"
-            }
+            "status": "success" if success else "failed",
+            "message": "Mensagem enviada com sucesso" if success else "Falha no envio",
+            "phone_number": clean_phone,
+            "sent_message": message,
+            "vm_endpoint": baileys_service.base_url
         }
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in deprecated WhatsApp trigger: {str(e)}")
+        logger.error(f"❌ Erro no teste de envio WhatsApp: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # =================== AUTORIZAÇÃO ===================
@@ -424,14 +434,19 @@ async def send_whatsapp_message(request: dict):
         if not phone_number or not message:
             raise HTTPException(status_code=400, detail="Missing phone_number or message")
 
-        logger.info(f"📤 Envio manual WhatsApp para {phone_number}")
-        success = await send_baileys_message(phone_number, message)
+        # ✅ CORREÇÃO: Limpar número antes de enviar
+        clean_phone = ''.join(filter(str.isdigit, phone_number))
+        if not clean_phone.startswith("55"):
+            clean_phone = f"55{clean_phone}"
+        
+        logger.info(f"📤 Envio manual WhatsApp para {clean_phone}")
+        success = await baileys_service.send_whatsapp_message(clean_phone, message)
 
         if success:
-            logger.info(f"✅ Mensagem enviada para {phone_number}")
-            return {"status": "success", "message": "WhatsApp message sent successfully", "to": phone_number}
+            logger.info(f"✅ Mensagem enviada para {clean_phone}")
+            return {"status": "success", "message": "WhatsApp message sent successfully", "to": clean_phone}
         
-        logger.error(f"❌ Falha ao enviar para {phone_number}")
+        logger.error(f"❌ Falha ao enviar para {clean_phone}")
         raise HTTPException(status_code=500, detail="Failed to send WhatsApp message")
 
     except Exception as e:

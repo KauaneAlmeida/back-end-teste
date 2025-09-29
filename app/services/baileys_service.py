@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
     
 class BaileysWhatsAppService:
     def __init__(self, base_url: str = None):
-        self.base_url = base_url or os.getenv("WHATSAPP_BOT_URL", "http://law_firm_whatsapp_bot:3000")
+        # ✅ ENDPOINT CORRETO DA VM
+        self.base_url = base_url or os.getenv("WHATSAPP_BOT_URL", "http://34.27.244.115:8081")
         self.timeout = 10
         self.max_retries = 2
         self.initialized = False
@@ -28,7 +29,7 @@ class BaileysWhatsAppService:
             return True
 
         try:
-            logger.info(f"Checking WhatsApp bot service at {self.base_url}")
+            logger.info(f"🔌 Inicializando conexão com VM Baileys: {self.base_url}")
 
             try:
                 await asyncio.wait_for(
@@ -37,12 +38,12 @@ class BaileysWhatsAppService:
                 )
                 return True
             except asyncio.TimeoutError:
-                logger.warning("WhatsApp bot initialization timed out")
+                logger.warning("⏰ Timeout na inicialização da VM Baileys")
                 self.initialized = False
                 return False
 
         except Exception as e:
-            logger.error(f"Error initializing WhatsApp bot: {str(e)}")
+            logger.error(f"❌ Erro ao inicializar VM Baileys: {str(e)}")
             self.initialized = False
             return False
 
@@ -61,38 +62,51 @@ class BaileysWhatsAppService:
                 )
                 
                 if response.status_code == 200:
-                    logger.info("WhatsApp bot service is reachable")
+                    logger.info("✅ VM Baileys está acessível")
                     self.initialized = True
                     self.connection_healthy = True
                     return True
                     
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    logger.warning(f"Connection attempt {attempt + 1} failed, retrying...")
+                    logger.warning(f"⚠️ Tentativa {attempt + 1} falhou, tentando novamente...")
                     await asyncio.sleep(2)
                 else:
-                    logger.error(f"Failed to connect after {self.max_retries} attempts: {str(e)}")
+                    logger.error(f"❌ Falha após {self.max_retries} tentativas: {str(e)}")
 
         return False
 
     async def cleanup(self):
         """Cleanup resources."""
-        logger.info("Cleaning up WhatsApp service resources")
+        logger.info("🧹 Limpando recursos do serviço WhatsApp")
         self.initialized = False
         self.connection_healthy = False
 
     async def send_whatsapp_message(self, phone_number: str, message: str) -> bool:
-        """Send WhatsApp message - core function called by Orchestrator."""
+        """
+        ✅ ENVIO DE MENSAGEM WHATSAPP CORRIGIDO
+        
+        Função principal chamada pelo Orchestrator
+        Corrigido: formato do número, endpoint, logs detalhados
+        """
         try:
-            # Format phone for WhatsApp
-            if "@s.whatsapp.net" not in phone_number:
-                clean_phone = ''.join(filter(str.isdigit, phone_number))
-                if not clean_phone.startswith("55"):
-                    clean_phone = f"55{clean_phone}"
-                phone_number = f"{clean_phone}@s.whatsapp.net"
+            # ✅ CORREÇÃO: NÃO ADICIONAR @s.whatsapp.net (VM já faz isso)
+            clean_phone = ''.join(filter(str.isdigit, phone_number))
+            if not clean_phone.startswith("55"):
+                clean_phone = f"55{clean_phone}"
+            
+            # ✅ PAYLOAD CORRETO PARA A VM
+            payload = {
+                "phone_number": clean_phone,  # Apenas o número limpo
+                "message": message
+            }
+            
+            logger.info(f"📤 Enviando mensagem WhatsApp")
+            logger.info(f"📱 Número: {clean_phone}")
+            logger.info(f"💬 Mensagem: {message[:100]}{'...' if len(message) > 100 else ''}")
+            logger.info(f"🔗 Endpoint: {self.base_url}/send-message")
+            logger.info(f"📦 Payload: {payload}")
 
-            payload = {"phone_number": phone_number, "message": message}
-            logger.info(f"Sending WhatsApp message to {phone_number[:15]}...")
 
             loop = asyncio.get_event_loop()
             response = await asyncio.wait_for(
@@ -101,35 +115,50 @@ class BaileysWhatsAppService:
                     lambda: requests.post(
                         f"{self.base_url}/send-message",
                         json=payload,
-                        timeout=self.timeout
+                        timeout=self.timeout,
+                        headers={"Content-Type": "application/json"}
                     )
                 ),
                 timeout=15.0
             )
 
+            # ✅ LOGS DETALHADOS DA RESPOSTA DA VM
+            logger.info(f"📊 Resposta da VM: Status {response.status_code}")
+            logger.info(f"📄 Resposta da VM: Body {response.text}")
+            
             if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    logger.info(f"WhatsApp message sent successfully to {phone_number[:15]}")
+                try:
+                    result = response.json()
+                    logger.info(f"📋 JSON da resposta: {result}")
+                    
+                    if result.get("success") or result.get("status") == "success":
+                        logger.info(f"✅ Mensagem WhatsApp enviada com sucesso para {clean_phone}")
+                        self.connection_healthy = True
+                        return True
+                    else:
+                        logger.error(f"❌ VM rejeitou mensagem: {result.get('error', 'Erro desconhecido')}")
+                        return False
+                except Exception as json_error:
+                    logger.error(f"❌ Erro ao parsear JSON da VM: {str(json_error)}")
+                    logger.error(f"📄 Resposta raw: {response.text}")
+                    # Se status 200 mas JSON inválido, considerar sucesso
                     self.connection_healthy = True
                     return True
-                else:
-                    logger.error(f"WhatsApp API error: {result.get('error', 'Unknown error')}")
-                    return False
             else:
-                logger.error(f"WhatsApp API failed with {response.status_code}: {response.text}")
+                logger.error(f"❌ VM retornou erro HTTP {response.status_code}")
+                logger.error(f"📄 Resposta: {response.text}")
                 return False
 
         except asyncio.TimeoutError:
-            logger.error("WhatsApp message request timed out")
+            logger.error("⏰ Timeout ao enviar mensagem WhatsApp para VM")
             self.connection_healthy = False
             return False
         except requests.exceptions.ConnectionError:
-            logger.error("Failed to connect to WhatsApp bot service")
+            logger.error("🔌 Falha de conexão com a VM Baileys")
             self.connection_healthy = False
             return False
         except Exception as e:
-            logger.error(f"Error sending WhatsApp message: {str(e)}")
+            logger.error(f"❌ Erro inesperado ao enviar WhatsApp: {str(e)}")
             return False
 
     async def get_connection_status(self) -> Dict[str, Any]:
@@ -158,7 +187,7 @@ class BaileysWhatsAppService:
                     "has_qr": data.get("hasQR", False),
                     "phone_number": data.get("phoneNumber", "unknown"),
                     "timestamp": data.get("timestamp"),
-                    "qr_url": f"{self.base_url}/qr" if not data.get("isConnected") else None,
+                    "qr_url": f"http://34.27.244.115:8081/qr" if not data.get("isConnected") else None,
                     "service_healthy": True
                 }
             else:
@@ -171,7 +200,7 @@ class BaileysWhatsAppService:
                 }
 
         except asyncio.TimeoutError:
-            logger.warning("WhatsApp status check timed out")
+            logger.warning("⏰ Timeout no status check da VM")
             self.connection_healthy = False
             return {
                 "status": "timeout", 
@@ -190,7 +219,7 @@ class BaileysWhatsAppService:
                 "error": "Service unavailable"
             }
         except Exception as e:
-            logger.error(f"Error getting WhatsApp status: {str(e)}")
+            logger.error(f"❌ Erro ao obter status da VM: {str(e)}")
             self.connection_healthy = False
             return {
                 "status": "error", 
