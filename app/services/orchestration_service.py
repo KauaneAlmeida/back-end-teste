@@ -863,6 +863,8 @@ class IntelligentHybridOrchestrator:
                 "current_step": session_data.get("current_step", 1),
                 "flow_completed": session_data.get("flow_completed", False),
                 "phone_submitted": session_data.get("phone_submitted", False),
+                "message_count": session_data.get("message_count", 0),
+                "gemini_available": session_data.get("gemini_available", True)
             }
             
         except asyncio.TimeoutError:
@@ -937,4 +939,5 @@ class IntelligentHybridOrchestrator:
 # ✅ INSTÂNCIA GLOBAL
 intelligent_orchestrator = IntelligentHybridOrchestrator()
 
+logger.info("🚀 StructuredFlowOrchestrator loaded successfully")
 logger.info("🚀 IntelligentHybridOrchestrator loaded successfully")
