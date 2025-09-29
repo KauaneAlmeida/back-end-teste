@@ -29,21 +29,21 @@ from app.services.firebase_service import (
 )
 from app.services.baileys_service import baileys_service
 from app.services.lawyer_notification_service import lawyer_notification_service
-from app.services.ai_chain import ai_orchestrator
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 class IntelligentHybridOrchestrator:
     """
-    ✅ ORQUESTRADOR HÍBRIDO INTELIGENTE
+    ✅ ORQUESTRADOR DE FLUXO ESTRUTURADO
     
-    Combina o melhor dos dois mundos:
-    1. IA Generativa (Gemini) - Respostas naturais e inteligentes
-    2. Fluxo Estruturado (Firebase) - Fallback confiável e coleta de dados
+    Sistema de fluxo conversacional estruturado baseado em Firebase:
+    1. Fluxo Estruturado (Firebase) - Coleta de dados confiável
+    2. Validação de respostas
+    3. Coleta automática de leads
     
     Características:
-    - Tenta IA primeiro, fallback para fluxo estruturado
+    - Fluxo estruturado baseado em steps
     - Coleta automática de leads
     - Notificação de advogados
     - Integração WhatsApp
@@ -54,7 +54,6 @@ class IntelligentHybridOrchestrator:
     
     def __init__(self):
         # Timeouts para diferentes operações
-        self.gemini_timeout = 15.0
         self.firebase_timeout = 10.0
         self.whatsapp_timeout = 15.0
         self.whatsapp_global_timeout = 30.0
@@ -67,12 +66,6 @@ class IntelligentHybridOrchestrator:
         # Session locks para evitar race conditions
         self.session_locks = defaultdict(asyncio.Lock)
         
-        # Gemini availability tracking
-        self.gemini_available = True
-        self.last_gemini_check = datetime.now()
-        self.gemini_check_interval = timedelta(minutes=5)
-        
-        logger.info("🚀 IntelligentHybridOrchestrator initialized")
 
     def safe_get_lead_data(self, session_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -106,7 +99,6 @@ class IntelligentHybridOrchestrator:
             "flow_completed": False,
             "phone_submitted": False,
             "message_count": 0,
-            "gemini_available": True,
             "platform": "web"
         }
         
@@ -179,7 +171,6 @@ class IntelligentHybridOrchestrator:
                 "phone_submitted": False,
                 "message_count": 0,
                 "lead_data": {},  # ✅ SEMPRE INICIALIZAR COMO DICT
-                "gemini_available": self.gemini_available,
                 "platform": "web",
                 "created_at": datetime.now().isoformat(),
                 "last_updated": datetime.now().isoformat()
